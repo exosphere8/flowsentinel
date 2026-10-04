@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/api-server", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+authors = ["exosphere8"]
+repository = "https://github.com/exosphere8/flowsentinel"
+publish = false
+
+[workspace.dependencies]
+axum = "0.8.9"
+clap = { version = "4.6.7", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower = { version = "0.5.3", features = ["util"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

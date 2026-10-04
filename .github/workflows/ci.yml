@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test
+        run: cargo test --workspace --locked
+      - name: Build
+        run: cargo build --workspace --locked
+
+  compose:
+    name: Docker Compose services
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Create CI environment file
+        run: |
+          cp .env.example .env
+          sed -i "s/=change-me$/=ci-$(openssl rand -hex 12)/" .env
+      - name: Validate compose file
+        run: docker compose config --quiet
+      - name: Start services and wait for health checks
+        run: docker compose up -d --wait --wait-timeout 120
+      - name: Show service status
+        run: docker compose ps
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
