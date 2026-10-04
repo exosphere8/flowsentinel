@@ -21,6 +21,30 @@ Contributions are welcome. FlowSentinel is security software, so the bar for saf
 On Windows without `make`, run the commands from the `check` target in the Makefile directly.
 If a build fails with `os error 3`, see the Windows note in the README.
 
+## Database tests
+
+The storage and API integration tests need a PostgreSQL server where the test user may create
+databases. Each test creates its own database, applies the migrations and drops it at the end,
+even when the test fails. Without a server they print a notice and pass, so `cargo test` works
+anywhere. CI runs them against a throwaway PostgreSQL 16 service and sets
+`FLOWSENTINEL_REQUIRE_DB_TESTS=1`, which turns a missing server into a failure.
+
+With the Compose services running (`make up`), run:
+
+```bash
+make test-db
+```
+
+Or point the tests at any disposable server yourself:
+
+```bash
+FLOWSENTINEL_TEST_DATABASE_URL=postgres://USER:PASSWORD@127.0.0.1:5432/postgres \
+  cargo test -p storage -p api-server
+```
+
+Never point them at a database whose data you need: they create and drop databases named
+`fs_test_*`.
+
 ## Quality gates
 
 Every pull request must pass the same gate as CI:
@@ -30,6 +54,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
+make test-db   # storage and API tests against PostgreSQL (CI runs these too)
 ```
 
 ## Coding standards

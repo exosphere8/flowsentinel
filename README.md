@@ -29,6 +29,10 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
 - **Milestone 4, flow reconstruction:** `flowsentinel flows --pcap` groups packets into
   bidirectional flows with per-direction counters, size and timing statistics, approximate TCP
   state and application metadata, within fixed memory limits.
+- **Milestone 5, persistence and REST API:** the API server imports PCAP uploads into PostgreSQL
+  as metadata only (captures, packets, flows, DNS/HTTP/TLS events) and serves them with
+  pagination, validated sorting, structured errors, retention controls and an OpenAPI
+  description.
 
 ## Quick start
 
@@ -37,11 +41,14 @@ Requirements: Rust 1.85+ (stable), Docker with Compose v2, and optionally `make`
 ```bash
 git clone https://github.com/exosphere8/flowsentinel.git
 cd flowsentinel
-cp .env.example .env            # then replace each "change-me" value
+cp .env.example .env            # replace each "change-me", using the same password in
+                                # POSTGRES_PASSWORD and FLOWSENTINEL_DATABASE_URL
 
 docker compose up -d --wait     # PostgreSQL + Redis, waits for health checks
-cargo run -p api-server         # serves http://127.0.0.1:8080
+make dev                        # loads .env, migrates the database, serves http://127.0.0.1:8080
 ```
+
+Without `make`, export the variables from `.env` yourself and run `cargo run -p api-server`.
 
 In another terminal:
 
@@ -49,9 +56,18 @@ In another terminal:
 curl http://127.0.0.1:8080/health
 # {"status":"ok","service":"flowsentinel-api"}
 
+curl -X POST -H 'Content-Type: application/vnd.tcpdump.pcap' \
+  --data-binary @fixtures/pcap/flows-mixed.pcap \
+  'http://127.0.0.1:8080/api/v1/captures?file_name=flows-mixed.pcap'
+curl 'http://127.0.0.1:8080/api/v1/captures/1/flows?sort=-bytes'
+
 cargo run -p cli -- --version
 # flowsentinel 0.1.0
 ```
+
+The API, its errors and limits are described in [docs/api.md](docs/api.md); what is stored and
+for how long in [docs/data-retention.md](docs/data-retention.md). The OpenAPI description is
+served at `/api/v1/openapi.json`.
 
 Stop the services with `docker compose down`. Add `-v` to also delete their data volumes.
 
@@ -133,6 +149,14 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `FLOWSENTINEL_API_ADDR` | `127.0.0.1:8080` | API listen address (`IP:PORT`) |
+| `FLOWSENTINEL_DATABASE_URL` | (required by the API) | PostgreSQL URL; never logged |
+| `FLOWSENTINEL_MAX_UPLOAD_MB` | 512 | Largest accepted upload |
+| `FLOWSENTINEL_MAX_CONCURRENT_IMPORTS` | 2 | Imports processed at once |
+| `FLOWSENTINEL_DB_MAX_CONNECTIONS` | 10 | Database connection pool size |
+| `FLOWSENTINEL_UPLOAD_DIR` | system temp dir | Where uploads are kept while analyzed (one directory per server) |
+| `FLOWSENTINEL_MAX_PACKETS` | 1000000 | Packets analyzed per import |
+| `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time per import's first pass |
+| `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | `Host` names the API answers (comma-separated, or `*`) |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -144,10 +168,11 @@ authentication until Milestone 9.
 | Command | Action |
 | --- | --- |
 | `make up` / `make down` | Start or stop PostgreSQL and Redis |
-| `make dev` | Run the API server |
+| `make dev` | Run the API server with the settings in `.env` |
 | `make fmt` | Format code |
 | `make lint` | Clippy with `-D warnings` |
-| `make test` | Run all tests |
+| `make test` | Run all tests (database tests skip without a server) |
+| `make test-db` | Run the storage and API tests against the Compose PostgreSQL |
 | `make check` | Full CI gate: format check, lint, test, build |
 | `make fixtures` | Regenerate the synthetic PCAP fixtures |
 
@@ -157,16 +182,18 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [ARCHITECTURE.md](AR
 
 ```
 crates/
-  api-server/   Axum HTTP service (GET /health)
+  analysis/     Two-pass analysis pipeline (capture, decode, flows) with bounded memory
+  api-server/   Axum HTTP service: /health and the /api/v1 metadata API
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
   decoder/      Bounds-checked protocol and application-metadata decoder
   flow-engine/  Bidirectional flow reconstruction with bounded memory
+  storage/      PostgreSQL persistence (SQLx, embedded migrations, retention)
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
 scripts/        Developer scripts, including the fixture generator
-tests/          Cross-service end-to-end tests (from Milestone 5)
+tests/          Notes on where the cross-crate and cross-service tests live
 ```
 
 ## Roadmap
@@ -178,7 +205,7 @@ tests/          Cross-service end-to-end tests (from Milestone 5)
 | 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Done |
 | 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Done |
 | 4 | Bidirectional flow reconstruction | Done |
-| 5 | PostgreSQL persistence and REST API | Planned |
+| 5 | PostgreSQL persistence and REST API | Done |
 | 6 | Display-filter language | Planned |
 | 7 | Explainable rule-based detection | Planned |
 | 8 | React dashboard | Planned |

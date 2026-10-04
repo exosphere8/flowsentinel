@@ -1,0 +1,21 @@
+[package]
+name = "analysis"
+description = "FlowSentinel analysis pipeline: capture, decode and flow reconstruction in bounded memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+capture.workspace = true
+decoder.workspace = true
+flow-engine.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

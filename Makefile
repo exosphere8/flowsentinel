@@ -1,4 +1,4 @@
-.PHONY: help up down dev test lint fmt check fixtures
+.PHONY: help up down dev test test-db lint fmt check fixtures
 
 CARGO ?= cargo
 
@@ -11,11 +11,18 @@ up: ## Start PostgreSQL and Redis and wait until healthy
 down: ## Stop PostgreSQL and Redis (data volumes are kept)
 	docker compose down
 
-dev: ## Run the API server on 127.0.0.1:8080
-	$(CARGO) run -p api-server
+dev: ## Run the API server on 127.0.0.1:8080 with settings from .env
+	@test -f .env || { echo "copy .env.example to .env and set the passwords first"; exit 1; }
+	set -a && . ./.env && set +a && $(CARGO) run -p api-server
 
-test: ## Run all workspace tests
+test: ## Run all workspace tests (database tests skip without a server)
 	$(CARGO) test --workspace
+
+test-db: ## Run the storage and API tests against the Compose PostgreSQL
+	@test -f .env || { echo "copy .env.example to .env and run make up first"; exit 1; }
+	set -a && . ./.env && set +a && \
+	  FLOWSENTINEL_TEST_DATABASE_URL="$$FLOWSENTINEL_DATABASE_URL" FLOWSENTINEL_REQUIRE_DB_TESTS=1 \
+	  $(CARGO) test -p storage -p api-server
 
 lint: ## Run clippy with warnings as errors
 	$(CARGO) clippy --workspace --all-targets -- -D warnings

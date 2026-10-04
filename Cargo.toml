@@ -1,11 +1,13 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/analysis",
     "crates/api-server",
     "crates/capture",
     "crates/cli",
     "crates/decoder",
     "crates/flow-engine",
+    "crates/storage",
 ]
 # Built separately with a nightly toolchain; see fuzz/README.md.
 exclude = ["fuzz"]
@@ -21,25 +23,33 @@ publish = false
 
 [workspace.dependencies]
 # Workspace crates
+analysis = { path = "crates/analysis" }
 capture = { path = "crates/capture" }
 decoder = { path = "crates/decoder" }
 flow-engine = { path = "crates/flow-engine" }
+storage = { path = "crates/storage" }
 
 # Third-party crates
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
+futures-util = { version = "0.3.34", default-features = false }
 libc = "0.2.190"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
+sha2 = "0.11.0"
+# 0.8 is the newest line that supports the workspace's Rust 1.85 minimum.
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "ipnetwork"] }
+tempfile = "3.27.0"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+# 5.x supports the workspace's Rust 1.85 minimum (6.x needs 1.88).
+utoipa = "5.5.0"
 
 # Test-only dependencies
 proptest = "1.11.0"
-tempfile = "3.27.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

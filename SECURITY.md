@@ -35,11 +35,36 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 4)
+## Current security posture (Milestone 5)
 
-- The API binds to `127.0.0.1` by default and has **no authentication yet**. Do not expose it to
-  a network. The server logs a warning if configured to listen on a non-loopback address.
-- The API serves only `GET /health`, which touches no data.
+- The API binds to `127.0.0.1` by default and has **no authentication yet**. Anyone who can reach
+  it can import, read and delete captures and change retention. Do not expose it to a network.
+  The server logs a warning if configured to listen on a non-loopback address.
+- The API sends no CORS headers, and every state-changing request needs a non-simple content
+  type (uploads require `application/vnd.tcpdump.pcap` or `application/octet-stream`) or method
+  (`PUT`, `DELETE`). Browsers therefore block cross-site requests to it from other origins.
+  Requests whose `Host` header is not a name of the server (by default only loopback names) are
+  refused with `421`, which stops DNS-rebinding pages from reaching a loopback API; set
+  `FLOWSENTINEL_ALLOWED_HOSTS` when clients use another name. CSRF protection and sessions
+  arrive with authentication in Milestone 9.
+- Uploads are streamed to a randomly named file in the upload directory (owner-only permissions
+  on Unix), limited in size (`FLOWSENTINEL_MAX_UPLOAD_MB`, checked against `Content-Length` and
+  while streaming), in idle time (30 s) and in rate (at least 16 KiB/s on average after 30 s),
+  and deleted when the import ends, successfully or not. Files left by a server that was killed
+  mid-import are deleted at the next startup. Only the sanitized final component of the
+  client's file name is stored. Imports run at most `FLOWSENTINEL_MAX_CONCURRENT_IMPORTS` at a
+  time, each holding its slot until its analysis threads finish, and each is analyzed under
+  packet, time and flow limits. Reads use the database pool minus connections reserved for
+  imports, and shutdown waits at most 30 seconds for running requests.
+- Storage is metadata only: no table has a column that can hold payload bytes, and the redaction
+  rules of the decoder apply to everything stored. Integration tests import every application
+  fixture and check that no secret or payload marker reaches the database or any API response.
+- Every SQL statement is parameterized. Sort orders are fixed fragments chosen by enums, and
+  query parameters are validated (unknown parameters are rejected). Errors are structured JSON
+  without SQL, file paths or stack traces. JSON request bodies are limited to 16 KiB.
+- The database URL, which contains a password, is never logged or returned. `Config`'s `Debug`
+  output redacts it. Retention (default 30 days, hourly purge) bounds how long imported metadata
+  is kept; see [docs/data-retention.md](docs/data-retention.md).
 - PostgreSQL and Redis bind to loopback, and Compose refuses to start them without passwords
   from `.env`. `.env` is git-ignored; only `.env.example` with placeholder values is committed.
 - `.gitignore` blocks `*.pcap`/`*.pcapng` outside `fixtures/` so real captures aren't committed by
@@ -76,5 +101,6 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   unbounded memory. Flows are timed by an internal clock that ignores a lone timestamp more than
   a day off, so a corrupt record cannot end, freeze or immortalize flows. Details: [docs/flow-engine.md](docs/flow-engine.md).
 
-Later milestones add authentication and RBAC (9), audit logging (9), upload hardening (5, 11),
-and dependency auditing, secret scanning and static analysis in CI (11).
+Later milestones add authentication and RBAC (9), audit logging (9), further upload and
+container hardening and TLS to the database (11), and dependency auditing, secret scanning and
+static analysis in CI (11).
