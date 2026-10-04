@@ -6,11 +6,30 @@ export interface Call {
   method: string;
   url: string;
   body: unknown;
+  /** The X-CSRF-Token header, if sent. */
+  csrf: string | null;
 }
 
 type Handler = (call: Call) => { status?: number; body?: unknown } | Promise<{ status?: number; body?: unknown }>;
 
+/** The session the page tests sign in with, unless a test says otherwise. */
+export function sessionAs(role: 'viewer' | 'analyst' | 'admin', username: string = role) {
+  return {
+    user: { id: role === 'admin' ? 1 : role === 'analyst' ? 2 : 3, username, role },
+    csrf_token: 'c'.repeat(64),
+    expires_at: '2026-10-04T22:00:00Z',
+    idle_timeout_seconds: 1800,
+  };
+}
+
+/**
+ * Stubs `fetch`. Unless `routes` answers `GET /auth/session` itself, the
+ * dashboard is signed in as an admin.
+ */
 export function mockApi(routes: [string, RegExp, Handler][]) {
+  const signedIn: [string, RegExp, Handler] = ['GET', /\/auth\/session$/, () => ({ body: sessionAs('admin') })];
+  routes = [...routes, signedIn];
+  // Calls the tests look at; the default session check is left out.
   const calls: Call[] = [];
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -23,9 +42,10 @@ export function mockApi(routes: [string, RegExp, Handler][]) {
         // Left as text.
       }
     }
-    const call = { method, url, body };
-    calls.push(call);
+    const headers = new Headers(init?.headers);
+    const call = { method, url, body, csrf: headers.get('X-CSRF-Token') };
     const route = routes.find(([m, pattern]) => m === method && pattern.test(url));
+    if (route !== signedIn) calls.push(call);
     if (!route) {
       return new Response(JSON.stringify({ error: { code: 'not_found', message: 'no such endpoint' } }), {
         status: 404,

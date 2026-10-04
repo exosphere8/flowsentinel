@@ -6,6 +6,7 @@ import { TableScroll } from '../components/Details';
 import { PageHeader } from '../components/Layout';
 import { Pagination, PastEnd } from '../components/Pagination';
 import { EmptyState, ErrorState, Loading } from '../components/States';
+import { useCan } from '../lib/auth';
 import { formatBytes, formatNumber, formatTime, humanize } from '../lib/format';
 import { useResource } from '../lib/useResource';
 import { useSearchState } from '../lib/useSearchState';
@@ -132,11 +133,17 @@ export function CapturesPage() {
     api.listCaptures({ page, per_page: PER_PAGE, sort }, signal),
   );
   const shown = captures.data ?? captures.previous;
+  const canImport = useCan('analyst');
+  const canDelete = useCan('admin');
 
   return (
     <>
       <PageHeader title="Captures" />
-      <ImportForm />
+      {canImport ? (
+        <ImportForm />
+      ) : (
+        <p className="notice">Viewers can browse captures; analysts and admins can import them.</p>
+      )}
       <section aria-labelledby="list-heading">
         <div className="toolbar">
           <h2 id="list-heading">Imported captures</h2>
@@ -194,11 +201,13 @@ export function CapturesPage() {
                       <td className="num">{formatNumber(capture.flows_total)}</td>
                       <td className="num">{formatNumber(capture.alerts_total)}</td>
                       <td>
-                        <DeleteButton
-                          id={capture.id}
-                          name={capture.file_name}
-                          onDeleted={captures.reload}
-                        />
+                        {canDelete && (
+                          <DeleteButton
+                            id={capture.id}
+                            name={capture.file_name}
+                            onDeleted={captures.reload}
+                          />
+                        )}
                       </td>
                     </tr>
                   ))}

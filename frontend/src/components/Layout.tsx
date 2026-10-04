@@ -1,7 +1,36 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link, NavLink, Outlet } from 'react-router';
 
+import { roleIncludes } from '../api/client';
+import { useAuth, useSession } from '../lib/auth';
+
+function AccountMenu() {
+  const session = useSession();
+  const { signOut } = useAuth();
+  const [busy, setBusy] = useState(false);
+  if (!session) return null;
+  return (
+    <div className="account-menu">
+      <NavLink to="/account">
+        {session.user.username} <span className="muted">({session.user.role})</span>
+      </NavLink>
+      <button
+        type="button"
+        className="secondary"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          signOut().catch(() => setBusy(false));
+        }}
+      >
+        Sign out
+      </button>
+    </div>
+  );
+}
+
 export function Layout() {
+  const admin = roleIncludes(useSession()?.user.role, 'admin');
   return (
     <>
       <a className="skip-link" href="#main">
@@ -25,8 +54,19 @@ export function Layout() {
             <li>
               <NavLink to="/settings">Settings</NavLink>
             </li>
+            {admin && (
+              <>
+                <li>
+                  <NavLink to="/users">Users</NavLink>
+                </li>
+                <li>
+                  <NavLink to="/audit">Audit log</NavLink>
+                </li>
+              </>
+            )}
           </ul>
         </nav>
+        <AccountMenu />
       </header>
       <main id="main" tabIndex={-1}>
         <Outlet />

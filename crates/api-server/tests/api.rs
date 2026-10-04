@@ -3,6 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
+use std::time::Duration;
+
+use api_server::auth::{AuthConfig, COOKIE_NAME, CSRF_HEADER, SessionToken};
 use api_server::host::HostPolicy;
 use api_server::{ApiConfig, AppState, app_with_state};
 use axum::Router;
@@ -19,6 +22,35 @@ struct Harness {
     db: TestDatabase,
     state: AppState,
     upload_dir: tempfile::TempDir,
+    /// The admin session every request sends unless it has its own cookie.
+    admin: SessionToken,
+}
+
+/// A PHC string for accounts whose password is never checked in a test.
+/// Tests that sign in create accounts with real hashes.
+const UNUSED_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$dW51c2VkLXNhbHQ$dW51c2VkLWhhc2g";
+
+/// Starts a session for an account directly in the database.
+async fn session_for(storage: &storage::Storage, user_id: i64) -> SessionToken {
+    let token = SessionToken::generate().unwrap();
+    storage
+        .create_auth_session(user_id, &token.digest(), Duration::from_secs(3600), 10)
+        .await
+        .unwrap();
+    token
+}
+
+/// Adds a session cookie and its CSRF token to a request that has no cookie.
+fn signed(mut request: Request<Body>, token: &SessionToken) -> Request<Body> {
+    let headers = request.headers_mut();
+    if !headers.contains_key(header::COOKIE) {
+        headers.insert(
+            header::COOKIE,
+            format!("{COOKIE_NAME}={}", token.to_hex()).parse().unwrap(),
+        );
+        headers.insert(CSRF_HEADER, token.csrf_token().parse().unwrap());
+    }
+    request
 }
 
 impl Harness {
@@ -52,13 +84,22 @@ impl Harness {
                 host_policy: HostPolicy::default_for("127.0.0.1:8080".parse().unwrap()),
                 detection: DetectionConfig::default(),
                 dashboard_dir,
+                auth: AuthConfig::default(),
             },
             1,
         );
+        let admin = db
+            .storage
+            .create_user("admin", UNUSED_HASH, storage::Role::Admin)
+            .await
+            .unwrap()
+            .unwrap();
+        let admin = session_for(&db.storage, admin.id).await;
         Some(Self {
             db,
             state,
             upload_dir,
+            admin,
         })
     }
 
@@ -67,7 +108,11 @@ impl Harness {
     }
 
     async fn send(&self, request: Request<Body>) -> (StatusCode, Value, axum::http::HeaderMap) {
-        let response = self.app().oneshot(request).await.unwrap();
+        let response = self
+            .app()
+            .oneshot(signed(request, &self.admin))
+            .await
+            .unwrap();
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = to_bytes(response.into_body(), 16 * 1024 * 1024)
@@ -1144,13 +1189,14 @@ async fn get_raw(
 ) -> (StatusCode, String, axum::http::HeaderMap) {
     let response = h
         .app()
-        .oneshot(
+        .oneshot(signed(
             Request::builder()
                 .method(method)
                 .uri(uri)
                 .body(Body::empty())
                 .unwrap(),
-        )
+            &h.admin,
+        ))
         .await
         .unwrap();
     let status = response.status();

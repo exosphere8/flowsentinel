@@ -15,6 +15,9 @@ is never stored, and how long stored data is kept.
 | `http_events` | HTTP packet | Method, host, path (query string removed, tokens masked), status, content type, whether anything was redacted |
 | `tls_events` | TLS handshake packet | Handshake type, server name, ALPN, negotiated version, cipher-suite count |
 | `retention_settings` | (one row) | The settings below |
+| `users` | Account | Username, role, whether disabled, Argon2id password hash, creation, change and last sign-in times |
+| `auth_sessions` | Signed-in session | SHA-256 digest of the session token (never the token), account, creation, last use and expiry times |
+| `audit_events` | Security event | Time, account and username, action, outcome, target, client address, small details object (see [authentication.md](authentication.md#the-audit-log)) |
 
 Every value comes from the decoder, flow engine and detection rules described in
 [protocol-decoding.md](protocol-decoding.md), [application-metadata.md](application-metadata.md),
@@ -35,6 +38,8 @@ and MAC addresses, never payload.
 - DNS record data other than addresses and names, and DHCP options other than the five documented
   ones.
 - The database URL or password, which never reach logs or error messages.
+- Passwords (only Argon2id hashes are stored), session tokens (only digests) and CSRF tokens
+  (derived when needed). The audit log never holds any of them.
 
 ## Settings
 
@@ -67,6 +72,10 @@ An import analyzes at most `FLOWSENTINEL_MAX_PACKETS` packets (1,000,000 by defa
 - `DELETE /api/v1/captures/{id}` deletes a capture at once.
 - Deleting a capture removes all its packets, flows, alerts and events in the same statement (foreign keys
   with `ON DELETE CASCADE`).
+- Ended sign-in sessions (expired or idle) are deleted every hour, and an account's sessions when
+  the account is deleted.
+- Audit events older than `FLOWSENTINEL_AUDIT_RETENTION_DAYS` (default 365) are deleted every hour.
+  Deleting a capture or an account keeps the audit events that mention it, until they expire.
 
 PostgreSQL reclaims the space of deleted rows through autovacuum. Deleted data can remain in the
 database's files, write-ahead log and backups until those are rotated. Treat database storage

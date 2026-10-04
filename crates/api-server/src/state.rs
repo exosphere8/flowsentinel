@@ -12,8 +12,10 @@ use flow_engine::FlowConfig;
 use storage::Storage;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::auth::{AuthConfig, MAX_CONCURRENT_HASHES};
 use crate::error::ApiError;
 use crate::host::HostPolicy;
+use crate::ratelimit::LoginLimiter;
 
 /// Longest wait for a database slot before a request is refused.
 const READ_SLOT_WAIT: Duration = Duration::from_secs(10);
@@ -34,6 +36,8 @@ pub struct ApiConfig {
     pub detection: DetectionConfig,
     /// Built dashboard to serve at `/` (a directory with `index.html`).
     pub dashboard_dir: Option<PathBuf>,
+    /// Sign-in session settings.
+    pub auth: AuthConfig,
 }
 
 /// State shared by all handlers.
@@ -50,6 +54,10 @@ pub struct AppState {
     /// One permit per concurrent filtered list query: at most half the read
     /// slots, so expensive filters cannot starve other reads.
     pub filter_slots: Arc<Semaphore>,
+    /// One permit per password hash being computed or checked.
+    pub hash_slots: Arc<Semaphore>,
+    /// Failed sign-in attempts per account name and client address.
+    pub login_limiter: Arc<LoginLimiter>,
 }
 
 impl AppState {
@@ -63,6 +71,8 @@ impl AppState {
             import_slots: Arc::new(Semaphore::new(imports)),
             read_slots: Arc::new(Semaphore::new(reads)),
             filter_slots: Arc::new(Semaphore::new((reads / 2).max(1))),
+            hash_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
+            login_limiter: Arc::new(LoginLimiter::new()),
         }
     }
 

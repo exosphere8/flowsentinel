@@ -70,6 +70,30 @@ export type AlertUpdate = {
   status: string;
 };
 
+/**
+ * A stored audit event.
+ */
+export type AuditEvent = {
+  action: string;
+  actor?: string | null;
+  actor_id?: number | null;
+  /**
+   * RFC 3339 UTC.
+   */
+  at: string;
+  client_ip?: string | null;
+  details: Record<string, unknown>;
+  id: number;
+  outcome: AuditOutcome;
+  target_id?: string | null;
+  target_type?: string | null;
+};
+
+/**
+ * How an audited action ended.
+ */
+export type AuditOutcome = "success" | "failure" | "denied";
+
 export type DnsEvent = {
   answer_count: number;
   answers: Record<string, unknown>[];
@@ -197,6 +221,29 @@ export type HttpEvent = {
 };
 
 /**
+ * Credentials for `POST /auth/login`. `Debug` never shows the password.
+ */
+export type LoginRequest = {
+  password: string;
+  username: string;
+};
+
+/**
+ * Body of `POST /users`.
+ */
+export type NewUser = {
+  /**
+   * 12 to 256 characters, not containing the username.
+   */
+  password: string;
+  role: Role;
+  /**
+   * 1 to 64 letters, digits, `.`, `_` or `-`; stored lowercase.
+   */
+  username: string;
+};
+
+/**
  * Totals across every stored capture, for the dashboard's overview.
  */
 export type Overview = {
@@ -257,6 +304,8 @@ export type PacketSummary = {
 
 export type Paged_AlertRow = Paged<AlertRow>;
 
+export type Paged_AuditEvent = Paged<AuditEvent>;
+
 export type Paged_DnsEvent = Paged<DnsEvent>;
 
 export type Paged_FlowSummaryRow = Paged<FlowSummaryRow>;
@@ -268,6 +317,19 @@ export type Paged_PacketSummary = Paged<PacketSummary>;
 export type Paged_Session = Paged<Session>;
 
 export type Paged_TlsEvent = Paged<TlsEvent>;
+
+export type Paged_User = Paged<User>;
+
+/**
+ * Body of `PUT /auth/password`.
+ */
+export type PasswordChange = {
+  current_password: string;
+  /**
+   * 12 to 256 characters, not containing the username.
+   */
+  new_password: string;
+};
 
 export type PcapFile = string;
 
@@ -293,6 +355,12 @@ export type RetentionSettings = {
    */
   session_ttl_days: number;
 };
+
+/**
+ * What an account may do. Each role includes everything the roles below it
+ * may do: `viewer` < `analyst` < `admin`.
+ */
+export type Role = "viewer" | "analyst" | "admin";
 
 /**
  * One detection rule.
@@ -376,6 +444,15 @@ export type Session = {
 };
 
 /**
+ * The signed-in account, as the dashboard sees it.
+ */
+export type SessionAccount = {
+  id: number;
+  role: Role;
+  username: string;
+};
+
+/**
  * A session with its stored summaries.
  */
 export type SessionDetail = Session & {
@@ -386,6 +463,26 @@ export type SessionDetail = Session & {
    */
   detection_summary: Record<string, unknown>;
   flow_summary: Record<string, unknown>;
+};
+
+/**
+ * A signed-in session.
+ */
+export type SessionInfo = {
+  /**
+   * Send this in the `X-CSRF-Token` header with every `POST`, `PUT`,
+   * `PATCH` and `DELETE` request.
+   */
+  csrf_token: string;
+  /**
+   * When the session ends at the latest (RFC 3339 UTC).
+   */
+  expires_at: string;
+  /**
+   * The session also ends after this many seconds without a request.
+   */
+  idle_timeout_seconds: number;
+  user: SessionAccount;
 };
 
 export type TlsEvent = {
@@ -402,4 +499,34 @@ export type TlsEvent = {
    * Always "visible handshake metadata only; nothing is decrypted".
    */
   visibility: string;
+};
+
+/**
+ * An account, without its password hash.
+ */
+export type User = {
+  created_at: string;
+  /**
+   * A disabled account cannot sign in, and its sessions end.
+   */
+  disabled: boolean;
+  id: number;
+  last_login_at?: string | null;
+  password_changed_at: string;
+  role: Role;
+  updated_at: string;
+  username: string;
+};
+
+/**
+ * Body of `PATCH /users/{id}`. Changing the role, the enabled state or the
+ * password ends the account's sessions.
+ */
+export type UserPatch = {
+  disabled?: boolean | null;
+  /**
+   * A new password, set by an admin.
+   */
+  password?: string | null;
+  role?: null | Role;
 };

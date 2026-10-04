@@ -13,6 +13,7 @@ use capture::{CaptureError, ErrorCategory, MonotonicClock, display_file_name};
 use detection_engine::{AlertStatus, Detector, NATURE, RULES};
 use filter_language::{CompiledFilter, FieldType, Param, Piece, Target, compile};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::{Postgres, QueryBuilder};
 use storage::{
     AlertFilter, AlertRow, AlertSort, DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent,
@@ -21,6 +22,8 @@ use storage::{
 };
 use utoipa::{IntoParams, ToSchema};
 
+use crate::audit;
+use crate::auth::{Admin, Analyst, Authorized, ClientIp};
 use crate::error::{ApiError, ErrorResponse};
 use crate::extract::{ApiJson, ApiPath, ApiQuery};
 use crate::state::AppState;
@@ -34,7 +37,7 @@ const IMPORT_QUEUE: usize = 4;
 /// Media types accepted for uploads.
 const UPLOAD_TYPES: [&str; 2] = ["application/vnd.tcpdump.pcap", "application/octet-stream"];
 
-fn page_of(page: Option<u32>, per_page: Option<u32>) -> Result<Page, ApiError> {
+pub(crate) fn page_of(page: Option<u32>, per_page: Option<u32>) -> Result<Page, ApiError> {
     let page = page.unwrap_or(1);
     let per_page = per_page.unwrap_or(DEFAULT_PER_PAGE);
     if page == 0 || page > Page::MAX_PAGE {
@@ -496,18 +499,54 @@ fn check_upload_headers(headers: &HeaderMap, max_bytes: u64) -> Result<(), ApiEr
         (status = 413, description = "Upload too large", body = ErrorResponse),
         (status = 415, description = "Wrong content type", body = ErrorResponse),
         (status = 422, description = "Not a supported or valid capture", body = ErrorResponse),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
+        (status = 403, description = "Needs the analyst role, or a missing CSRF token", body = ErrorResponse),
         (status = 429, description = "Too many imports in progress", body = ErrorResponse),
         (status = 503, description = "Server busy or database unavailable", body = ErrorResponse),
     )
 )]
 pub async fn import_capture(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
+    analyst: Authorized<Analyst>,
     ApiQuery(params): ApiQuery<UploadParams>,
     headers: HeaderMap,
     body: Body,
 ) -> Result<Response, ApiError> {
+    let result = import_upload(&state, &params, &headers, body).await;
+    let file_name = upload_file_name(&params.file_name).unwrap_or_default();
+    let event = match &result {
+        Ok((detail, _)) => storage::NewAuditEvent {
+            target_type: Some("capture"),
+            target_id: Some(detail.session.id.to_string()),
+            details: json!({
+                "file_name": file_name,
+                "sha256": detail.session.sha256,
+                "packets": detail.session.packets_processed,
+                "alerts": detail.session.alerts_total,
+            }),
+            ..audit::by(analyst.user(), "capture.import")
+        },
+        Err(err) => storage::NewAuditEvent {
+            outcome: storage::AuditOutcome::Failure,
+            details: json!({ "file_name": file_name, "code": err.code }),
+            ..audit::by(analyst.user(), "capture.import")
+        },
+    };
+    audit::record(&state, storage::NewAuditEvent { client_ip, ..event }).await;
+    result.map(|(_, response)| response)
+}
+
+/// Streams, analyzes and stores one upload. Returns the stored capture and
+/// the `201` response.
+async fn import_upload(
+    state: &AppState,
+    params: &UploadParams,
+    headers: &HeaderMap,
+    body: Body,
+) -> Result<(SessionDetail, Response), ApiError> {
     let file_name = upload_file_name(&params.file_name)?;
-    check_upload_headers(&headers, state.config.max_upload_bytes)?;
+    check_upload_headers(headers, state.config.max_upload_bytes)?;
     // The permit is shared with the analysis threads, so the slot stays taken
     // until they finish, even if the client disconnects first.
     let Ok(permit) = Arc::clone(&state.import_slots).try_acquire_owned() else {
@@ -616,12 +655,13 @@ pub async fn import_capture(
     );
     let location = HeaderValue::try_from(format!("/api/v1/captures/{}", session.session.id))
         .map_err(|e| ApiError::internal("location header", &e))?;
-    Ok((
+    let response = (
         StatusCode::CREATED,
         [(header::LOCATION, location)],
-        Json(session),
+        Json(&session),
     )
-        .into_response())
+        .into_response();
+    Ok((session, response))
 }
 
 /// Totals across all captures, alert counts and the newest captures.
@@ -692,21 +732,37 @@ pub async fn get_capture(
     params(("id" = i64, Path, description = "Capture ID")),
     responses(
         (status = 204, description = "Deleted"),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
+        (status = 403, description = "Needs the admin role, or a missing CSRF token", body = ErrorResponse),
         (status = 404, description = "Not found", body = ErrorResponse),
         (status = 503, description = "Server busy or database unavailable", body = ErrorResponse),
     )
 )]
 pub async fn delete_capture(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
+    admin: Authorized<Admin>,
     ApiPath(id): ApiPath<i64>,
 ) -> Result<StatusCode, ApiError> {
-    let _slot = state.read_slot().await?;
-    if state.storage.delete_session(id).await? {
-        tracing::info!(session_id = id, "capture deleted");
-        Ok(StatusCode::NO_CONTENT)
-    } else {
-        Err(ApiError::not_found("capture"))
+    let deleted = {
+        let _slot = state.read_slot().await?;
+        state.storage.delete_session(id).await?
+    };
+    if !deleted {
+        return Err(ApiError::not_found("capture"));
     }
+    tracing::info!(session_id = id, "capture deleted");
+    audit::record(
+        &state,
+        storage::NewAuditEvent {
+            client_ip,
+            target_type: Some("capture"),
+            target_id: Some(id.to_string()),
+            ..audit::by(admin.user(), "capture.delete")
+        },
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// List a capture's packets.
@@ -978,12 +1034,16 @@ pub async fn get_alert(
     responses(
         (status = 200, description = "The updated alert", body = AlertRow),
         (status = 400, description = "Invalid status", body = ErrorResponse),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
+        (status = 403, description = "Needs the analyst role, or a missing CSRF token", body = ErrorResponse),
         (status = 404, description = "Not found", body = ErrorResponse),
         (status = 422, description = "Malformed body", body = ErrorResponse),
     )
 )]
 pub async fn update_alert(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
+    analyst: Authorized<Analyst>,
     ApiPath((id, alert_id)): ApiPath<(i64, i64)>,
     ApiJson(update): ApiJson<AlertUpdate>,
 ) -> Result<Json<AlertRow>, ApiError> {
@@ -1002,6 +1062,17 @@ pub async fn update_alert(
         status = status.as_str(),
         "alert status changed"
     );
+    audit::record(
+        &state,
+        storage::NewAuditEvent {
+            client_ip,
+            target_type: Some("alert"),
+            target_id: Some(format!("{id}/{alert_id}")),
+            details: json!({ "status": status.as_str(), "rule_id": alert.rule_id }),
+            ..audit::by(analyst.user(), "alert.status_change")
+        },
+    )
+    .await;
     Ok(Json(alert))
 }
 
@@ -1120,15 +1191,19 @@ pub async fn get_retention(
     responses(
         (status = 200, description = "Updated settings", body = RetentionSettings),
         (status = 400, description = "Out of range", body = ErrorResponse),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
+        (status = 403, description = "Needs the admin role, or a missing CSRF token", body = ErrorResponse),
         (status = 422, description = "Malformed body", body = ErrorResponse),
         (status = 503, description = "Server busy or database unavailable", body = ErrorResponse),
     )
 )]
 pub async fn put_retention(
     State(state): State<AppState>,
+    ClientIp(client_ip): ClientIp,
+    admin: Authorized<Admin>,
     ApiJson(settings): ApiJson<RetentionSettings>,
 ) -> Result<Json<RetentionSettings>, ApiError> {
-    let _slot = state.read_slot().await?;
+    let slot = state.read_slot().await?;
     if !(1..=3650).contains(&settings.session_ttl_days) {
         return Err(ApiError::bad_request(
             "invalid_ttl",
@@ -1142,11 +1217,26 @@ pub async fn put_retention(
         ));
     }
     let updated = state.storage.update_retention(settings).await?;
+    drop(slot);
     tracing::info!(
         session_ttl_days = updated.session_ttl_days,
         max_packets_stored = updated.max_packets_stored,
         "retention settings updated"
     );
+    audit::record(
+        &state,
+        storage::NewAuditEvent {
+            client_ip,
+            target_type: Some("settings"),
+            target_id: Some("retention".to_owned()),
+            details: json!({
+                "session_ttl_days": updated.session_ttl_days,
+                "max_packets_stored": updated.max_packets_stored,
+            }),
+            ..audit::by(admin.user(), "settings.retention_change")
+        },
+    )
+    .await;
     Ok(Json(updated))
 }
 

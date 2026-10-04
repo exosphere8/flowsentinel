@@ -6,6 +6,7 @@
 //! hold packet payload bytes: packets keep decoded header and application
 //! metadata only.
 
+mod accounts;
 mod ingest;
 mod models;
 #[cfg(feature = "test-support")]
@@ -16,6 +17,10 @@ use std::time::Duration;
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
+pub use accounts::{
+    AccountChange, AuditEvent, AuditFilter, AuditOutcome, Credentials, NewAuditEvent, Role,
+    SessionUser, User, UserUpdate,
+};
 pub use ingest::{ImportMeta, ImportTransaction, PacketRow};
 pub use models::{
     AlertRow, DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, Overview, PacketDetail,

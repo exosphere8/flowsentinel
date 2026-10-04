@@ -5,13 +5,16 @@ metadata API described in [api.md](api.md) and shows captures, packets, flows an
 It shows **metadata only**: the API has no payload fields, and the dashboard also refuses to
 render any field named like packet contents (see [Privacy](#privacy)).
 
-> Until Milestone 9 the API and the dashboard have **no authentication**. Keep the server on
-> `127.0.0.1` (the default) and do not expose it to a network.
+Everyone signs in first (`/login`), and each page shows only what the account's role may do:
+viewers read, analysts also import captures and triage alerts, and admins also delete captures,
+change settings, manage accounts and read the audit log. The server enforces the same rules. See
+[authentication.md](authentication.md).
 
 ## Pages
 
 | Path | Page |
 | --- | --- |
+| `/login` | Sign in; afterwards the page that was asked for opens |
 | `/` | Overview: totals, alerts by severity and status, open alerts, recent imports |
 | `/captures` | Import a capture (upload a `.pcap` file), and list, sort and delete imported captures |
 | `/captures/{id}` | One capture: file facts, completion state, limits reached, warnings, and charts of protocols, decode status, why flows ended and alerts by rule |
@@ -21,7 +24,10 @@ render any field named like packet contents (see [Privacy](#privacy)).
 | `/captures/{id}/flows/{flow_id}` | One flow: endpoints, per-direction statistics, TCP state, application metadata, and the alerts that cite it |
 | `/captures/{id}/alerts` | Alerts, filtered by severity, status and rule |
 | `/captures/{id}/alerts/{alert_id}` | One alert: what was observed, why it may be wrong, likely false positives, cited flows and packets, and triage |
-| `/settings` | Retention settings, the detection rule catalog, and the display-filter field reference |
+| `/settings` | Retention settings (changed by admins), the detection rule catalog, and the display-filter field reference |
+| `/account` | Your account and session, and changing your password |
+| `/users` | Admins: create accounts, change roles, disable, set passwords, delete |
+| `/audit` | Admins: the audit log, filtered by action and outcome |
 
 Every alert page says that **alerts are heuristic indicators to review, not proof of
 compromise**. Each alert shows its rule's uncertainty and likely benign causes next to its
@@ -158,16 +164,20 @@ color contrast is not measured in jsdom; manual review with a screen reader is s
 The end-to-end smoke tests import `fixtures/pcap/detect-mixed.pcap` through the dashboard and
 walk every page: the capture, packets with a valid and an invalid filter, a packet's protocol
 tree, flows filtered by alert severity, a flow, the alert list, one alert and its triage,
-settings, and the overview. They fail on console errors, uncaught exceptions, CSP violations or
-any `5xx` response, and check the security headers. To run them locally, start an API server
-that serves the built dashboard on port 18080 with an empty, disposable database:
+settings, and the overview. They sign in as the first admin, create a viewer account, read the
+audit log, sign out, and check as the viewer that admin pages and controls are absent and that
+the API refuses them. They fail on console errors (other than expected `4xx` responses), uncaught
+exceptions, CSP violations or any `5xx` response, and check the security headers. To run them
+locally, start an API server that serves the built dashboard on port 18080 with an empty,
+disposable database and a first admin:
 
 ```bash
 cd frontend && npm ci && npm run build && npx playwright install chromium && cd ..
+printf '%s\n' 'a throwaway e2e passphrase' > /tmp/e2e-admin-password
 FLOWSENTINEL_DATABASE_URL=postgres://USER:PASSWORD@127.0.0.1:5432/flowsentinel_e2e \
   FLOWSENTINEL_API_ADDR=127.0.0.1:18080 FLOWSENTINEL_DASHBOARD_DIR=frontend/dist \
-  cargo run -p api-server &
-cd frontend && npm run e2e
+  FLOWSENTINEL_ADMIN_PASSWORD_FILE=/tmp/e2e-admin-password cargo run -p api-server &
+cd frontend && E2E_ADMIN_PASSWORD='a throwaway e2e passphrase' npm run e2e
 ```
 
 `E2E_BASE_URL` points the tests at another server. CI runs all of these in the `frontend` job
@@ -181,5 +191,5 @@ that it serves the dashboard with the CSP header as UID 10001.
 - Tables show 25 (captures), 50 (flows, alerts) or 100 (packets) rows per page; the API allows
   at most 500.
 - Nested protocol fields are shown up to 6 levels deep and 100 items per list.
-- There are no accounts, roles or sign-in until Milestone 9; anyone who can reach the server can
-  import, triage and delete.
+- Hiding a control is a convenience, not the protection: the server checks every request's role
+  and CSRF token.

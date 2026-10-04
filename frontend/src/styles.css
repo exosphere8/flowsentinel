@@ -620,3 +620,49 @@ input[aria-invalid='true'] {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Accounts */
+
+.account-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+}
+
+.outcome-success {
+  background: var(--low-bg);
+  color: var(--low-text);
+}
+
+.outcome-failure {
+  background: var(--medium-bg);
+  color: var(--medium-text);
+}
+
+.outcome-denied {
+  background: var(--high-bg);
+  color: var(--high-text);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.login {
+  display: flex;
+  justify-content: center;
+  padding-top: 4rem;
+}
+
+.login-form {
+  width: 100%;
+  max-width: 26rem;
+}
+
+.login-form .field {
+  max-width: none;
+}

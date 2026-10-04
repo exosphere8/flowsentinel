@@ -5,6 +5,10 @@
 #   docker compose --profile app up -d --build   ...plus the API server with the
 #                                                dashboard on http://127.0.0.1:8080
 #
+# Create the first admin once the app runs (the password is read from stdin):
+#   read -rs PW && printf '%s\n' "$PW" | docker compose --profile app exec -T app \
+#     flowsentinel-api create-user --username admin --role admin
+#
 # Ports bind to 127.0.0.1 only. Credentials come from .env (see .env.example);
 # compose refuses to start if a password is unset.
 
@@ -68,6 +72,8 @@ services:
       # name clients use, comma-separated (see docs/api.md).
       FLOWSENTINEL_ALLOWED_HOSTS: ${FLOWSENTINEL_ALLOWED_HOSTS:-}
       RUST_LOG: ${RUST_LOG:-info}
+      # true when an HTTPS reverse proxy is in front (see docs/authentication.md).
+      FLOWSENTINEL_SECURE_COOKIES: ${FLOWSENTINEL_SECURE_COOKIES:-false}
     ports:
       - "127.0.0.1:${FLOWSENTINEL_PORT:-8080}:8080"
     volumes:

@@ -7,6 +7,19 @@ import { expect, test, type Page } from '@playwright/test';
 
 const FIXTURE = fileURLToPath(new URL('../../fixtures/pcap/detect-mixed.pcap', import.meta.url));
 const MARKERS = ['FLOWSENTINEL-SYNTHETIC-PAYLOAD-MARKER', 'FLOWSENTINEL-SECRET'];
+// The server's first admin (FLOWSENTINEL_ADMIN_PASSWORD_FILE); see docs/dashboard.md.
+const ADMIN = process.env.E2E_ADMIN_USERNAME ?? 'admin';
+const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? '';
+const VIEWER_PASSWORD = 'viewer passphrase for the smoke test';
+
+async function signIn(page: Page, username: string, password: string) {
+  await page.goto('/');
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await page.getByLabel('Username').fill(username);
+  await page.getByLabel('Password').fill(password);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Overview');
+}
 
 /**
  * Collects console errors (including CSP violations), page errors and server
@@ -18,6 +31,8 @@ function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on('console', (message) => {
     const text = message.text();
+    // 4xx responses are expected: the session check before sign-in (401)
+    // and an invalid filter (400).
     if (message.type() === 'error' && !/^Failed to load resource: .* status of 4\d\d/.test(text)) {
       errors.push(text);
     }
@@ -37,10 +52,10 @@ async function expectNoPayload(page: Page) {
 }
 
 test('import a capture and walk the dashboard', async ({ page }) => {
+  expect(ADMIN_PASSWORD, 'set E2E_ADMIN_PASSWORD').not.toBe('');
   const errors = watchErrors(page);
 
-  await page.goto('/');
-  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Overview');
+  await signIn(page, ADMIN, ADMIN_PASSWORD);
 
   // Import through the UI.
   await page.getByRole('link', { name: 'Captures', exact: true }).click();
@@ -98,7 +113,41 @@ test('import a capture and walk the dashboard', async ({ page }) => {
   await page.getByRole('link', { name: 'Overview' }).click();
   await expect(page.getByRole('list', { name: 'Totals' })).toContainText('138');
 
+  // Accounts: create a viewer and check the audit log.
+  await page.getByRole('link', { name: 'Users' }).click();
+  await page.getByLabel('Username', { exact: true }).fill('smoke-viewer');
+  await page.getByLabel('Initial password').fill(VIEWER_PASSWORD);
+  await page.getByLabel('Role', { exact: true }).selectOption('viewer');
+  await page.getByRole('button', { name: 'Create account' }).click();
+  await expect(page.getByText('Created smoke-viewer (viewer).')).toBeVisible();
+  await page.getByRole('link', { name: 'Audit log' }).click();
+  await expect(page.getByRole('region', { name: 'Audit events (table)' })).toContainText('capture.import');
+  await expect(page.getByRole('region', { name: 'Audit events (table)' })).toContainText('user.create');
+  await expect(page.locator('body')).not.toContainText(VIEWER_PASSWORD);
+
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page).toHaveURL(/\/login/);
+
   expect(errors).toEqual([]);
+});
+
+test('a viewer reads but cannot change anything', async ({ page }) => {
+  const errors = watchErrors(page);
+  await signIn(page, 'smoke-viewer', VIEWER_PASSWORD);
+  await page.getByRole('link', { name: 'Captures', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'detect-mixed.pcap' }).first()).toBeVisible();
+  await expect(page.getByLabel('Capture file')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Delete/ })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Users' })).toHaveCount(0);
+  await page.goto('/users');
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Not permitted');
+  // The API refuses too, whatever the page shows.
+  const refused = await page.evaluate(async () => {
+    const response = await fetch('/api/v1/users');
+    return response.status;
+  });
+  expect(refused).toBe(403);
+  expect(errors.filter((e) => !e.includes('403'))).toEqual([]);
 });
 
 test('the server sends a strict content security policy', async ({ request }) => {

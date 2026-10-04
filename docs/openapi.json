@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "FlowSentinel API",
-    "description": "Metadata-only analysis of authorized packet captures. No endpoint returns packet payloads, and TLS is never decrypted.",
+    "description": "Metadata-only analysis of authorized packet captures. No endpoint returns packet payloads, and TLS is never decrypted. Every endpoint except POST /auth/login needs a signed-in session; viewers read, analysts also import and triage, admins also delete, change settings, manage accounts and read the audit log.",
     "contact": {
       "name": "exosphere8"
     },
@@ -12,6 +12,347 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/v1/audit": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "Read the audit log, newest first (admin).",
+        "operationId": "list_audit",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "path",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "path",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "action",
+            "in": "path",
+            "description": "Only this action, for example `auth.login`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "outcome",
+            "in": "path",
+            "description": "`success`, `failure` or `denied`.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "actor",
+            "in": "path",
+            "description": "Only events by this account name.",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of audit events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_AuditEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign in.",
+        "description": "Sets the session cookie and returns the CSRF token. After 5 failures for\none username (or 20 from one address) within 15 minutes, attempts are\nrefused with `429` until the oldest failure is 15 minutes old.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in; the response sets the session cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong username or password, or disabled account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-site request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Sign out: ends the session and removes its cookie.",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing CSRF token or cross-site request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/password": {
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Change your own password.",
+        "description": "Ends every session of the account, including this one, and starts a new\nsession for this client: the response sets a new cookie and CSRF token.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Changed; a new session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Wrong current password, or the new one is too weak",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing CSRF token or cross-site request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many failed attempts; see Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/session": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "The current session.",
+        "operationId": "session",
+        "responses": {
+          "200": {
+            "description": "The signed-in account and its CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/captures": {
       "get": {
         "tags": [
@@ -134,6 +475,26 @@
           },
           "400": {
             "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the analyst role, or a missing CSRF token",
             "content": {
               "application/json": {
                 "schema": {
@@ -288,6 +649,26 @@
         "responses": {
           "204": {
             "description": "Deleted"
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role, or a missing CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           },
           "404": {
             "description": "Not found",
@@ -527,6 +908,26 @@
           },
           "400": {
             "description": "Invalid status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the analyst role, or a missing CSRF token",
             "content": {
               "application/json": {
                 "schema": {
@@ -1373,6 +1774,26 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role, or a missing CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Malformed body",
             "content": {
@@ -1385,6 +1806,337 @@
           },
           "503": {
             "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "tags": [
+          "users"
+        ],
+        "summary": "List accounts (admin).",
+        "operationId": "list_users",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "path",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "path",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of accounts, by username",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_User"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Create an account (admin).",
+        "operationId": "create_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewUser"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid username or weak password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The username is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed body or unknown role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}": {
+      "delete": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Delete an account and end its sessions (admin).",
+        "description": "Admins cannot delete their own account, and the last enabled admin\ncannot be deleted.",
+        "operationId": "delete_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "400": {
+            "description": "Cannot delete your own account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It would leave no enabled admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Change an account's role, enabled state or password (admin).",
+        "description": "Any of these changes ends the account's sessions. The last enabled admin\ncannot be demoted or disabled.",
+        "operationId": "update_user",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Nothing to change, or a weak password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "It would leave no enabled admin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed body or unknown role",
             "content": {
               "application/json": {
                 "schema": {
@@ -1552,6 +2304,76 @@
           }
         },
         "additionalProperties": false
+      },
+      "AuditEvent": {
+        "type": "object",
+        "description": "A stored audit event.",
+        "required": [
+          "id",
+          "at",
+          "action",
+          "outcome",
+          "details"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "at": {
+            "type": "string",
+            "description": "RFC 3339 UTC."
+          },
+          "client_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "details": {
+            "type": "object"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AuditOutcome"
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AuditOutcome": {
+        "type": "string",
+        "description": "How an audited action ended.",
+        "enum": [
+          "success",
+          "failure",
+          "denied"
+        ]
       },
       "DnsEvent": {
         "type": "object",
@@ -1938,6 +2760,46 @@
           }
         }
       },
+      "LoginRequest": {
+        "type": "object",
+        "description": "Credentials for `POST /auth/login`. `Debug` never shows the password.",
+        "required": [
+          "username",
+          "password"
+        ],
+        "properties": {
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "NewUser": {
+        "type": "object",
+        "description": "Body of `POST /users`.",
+        "required": [
+          "username",
+          "password",
+          "role"
+        ],
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "12 to 256 characters, not containing the username."
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "username": {
+            "type": "string",
+            "description": "1 to 64 letters, digits, `.`, `_` or `-`; stored lowercase."
+          }
+        },
+        "additionalProperties": false
+      },
       "Overview": {
         "type": "object",
         "description": "Totals across every stored capture, for the dashboard's overview.",
@@ -2273,6 +3135,97 @@
                 },
                 "uncertainty": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_AuditEvent": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A stored audit event.",
+              "required": [
+                "id",
+                "at",
+                "action",
+                "outcome",
+                "details"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "actor_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "at": {
+                  "type": "string",
+                  "description": "RFC 3339 UTC."
+                },
+                "client_ip": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "details": {
+                  "type": "object"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "outcome": {
+                  "$ref": "#/components/schemas/AuditOutcome"
+                },
+                "target_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "target_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               }
             }
@@ -3011,6 +3964,98 @@
           }
         }
       },
+      "Paged_User": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "An account, without its password hash.",
+              "required": [
+                "id",
+                "username",
+                "role",
+                "disabled",
+                "created_at",
+                "updated_at",
+                "password_changed_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string"
+                },
+                "disabled": {
+                  "type": "boolean",
+                  "description": "A disabled account cannot sign in, and its sessions end."
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "last_login_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "password_changed_at": {
+                  "type": "string"
+                },
+                "role": {
+                  "$ref": "#/components/schemas/Role"
+                },
+                "updated_at": {
+                  "type": "string"
+                },
+                "username": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "PasswordChange": {
+        "type": "object",
+        "description": "Body of `PUT /auth/password`.",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "properties": {
+          "current_password": {
+            "type": "string"
+          },
+          "new_password": {
+            "type": "string",
+            "description": "12 to 256 characters, not containing the username."
+          }
+        },
+        "additionalProperties": false
+      },
       "PcapFile": {
         "type": "string",
         "format": "binary"
@@ -3053,6 +4098,15 @@
           }
         },
         "additionalProperties": false
+      },
+      "Role": {
+        "type": "string",
+        "description": "What an account may do. Each role includes everything the roles below it\nmay do: `viewer` < `analyst` < `admin`.",
+        "enum": [
+          "viewer",
+          "analyst",
+          "admin"
+        ]
       },
       "RuleInfo": {
         "type": "object",
@@ -3242,6 +4296,27 @@
           }
         }
       },
+      "SessionAccount": {
+        "type": "object",
+        "description": "The signed-in account, as the dashboard sees it.",
+        "required": [
+          "id",
+          "username",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
       "SessionDetail": {
         "allOf": [
           {
@@ -3276,6 +4351,35 @@
           }
         ],
         "description": "A session with its stored summaries."
+      },
+      "SessionInfo": {
+        "type": "object",
+        "description": "A signed-in session.",
+        "required": [
+          "user",
+          "csrf_token",
+          "expires_at",
+          "idle_timeout_seconds"
+        ],
+        "properties": {
+          "csrf_token": {
+            "type": "string",
+            "description": "Send this in the `X-CSRF-Token` header with every `POST`, `PUT`,\n`PATCH` and `DELETE` request."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When the session ends at the latest (RFC 3339 UTC)."
+          },
+          "idle_timeout_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The session also ends after this many seconds without a request.",
+            "minimum": 0
+          },
+          "user": {
+            "$ref": "#/components/schemas/SessionAccount"
+          }
+        }
       },
       "TlsEvent": {
         "type": "object",
@@ -3341,9 +4445,96 @@
             "description": "Always \"visible handshake metadata only; nothing is decrypted\"."
           }
         }
+      },
+      "User": {
+        "type": "object",
+        "description": "An account, without its password hash.",
+        "required": [
+          "id",
+          "username",
+          "role",
+          "disabled",
+          "created_at",
+          "updated_at",
+          "password_changed_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": "A disabled account cannot sign in, and its sessions end."
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_login_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "password_changed_at": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "UserPatch": {
+        "type": "object",
+        "description": "Body of `PATCH /users/{id}`. Changing the role, the enabled state or the\npassword ends the account's sessions.",
+        "properties": {
+          "disabled": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "password": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new password, set by an admin."
+          },
+          "role": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Role"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "flowsentinel_session",
+        "description": "Session cookie set by POST /auth/login (named __Host-flowsentinel_session when FLOWSENTINEL_SECURE_COOKIES=true). State-changing requests must also send the session's CSRF token in the X-CSRF-Token header."
       }
     }
   },
+  "security": [
+    {
+      "session": []
+    }
+  ],
   "tags": [
     {
       "name": "captures",
@@ -3372,6 +4563,18 @@
     {
       "name": "settings",
       "description": "Retention settings"
+    },
+    {
+      "name": "auth",
+      "description": "Sign-in sessions and passwords"
+    },
+    {
+      "name": "users",
+      "description": "Account management (admin)"
+    },
+    {
+      "name": "audit",
+      "description": "Security audit log (admin)"
     }
   ]
 }
