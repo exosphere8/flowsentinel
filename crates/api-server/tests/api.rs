@@ -1199,6 +1199,8 @@ async fn the_dashboard_is_served_with_security_headers() {
         assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
         assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+        // Revalidated on every load, so an upgrade takes effect at once.
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{path}");
     }
     let (status, body, headers) = get_raw(&h, Method::GET, "/assets/app.js").await;
     assert_eq!(status, StatusCode::OK);
@@ -1209,6 +1211,30 @@ async fn the_dashboard_is_served_with_security_headers() {
             .unwrap()
             .contains("javascript")
     );
+    assert_eq!(
+        headers[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+    // A missing asset is not answered with the page (which a browser would
+    // try to run as a script), and the 404 is not cached.
+    let (status, body, headers) = get_raw(&h, Method::GET, "/assets/old-build.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!body.contains("<title>"));
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // No path under /api/ is ever answered with the page.
+    for path in ["/api", "/api/", "/api/v1/", "/api/v2/captures"] {
+        let (status, body, headers) = get_raw(&h, Method::GET, path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert!(body.contains("\"not_found\""), "{path}: {body}");
+        assert!(
+            headers[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json"),
+            "{path}"
+        );
+    }
     // The API keeps its JSON errors and headers.
     let (status, body) = h.get("/api/v1/no-such-endpoint").await;
     assert_eq!(

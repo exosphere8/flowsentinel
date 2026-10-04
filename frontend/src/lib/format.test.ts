@@ -22,6 +22,17 @@ describe('format', () => {
     expect(formatDuration(7200)).toBe('2 h 0 min');
   });
 
+  it('chooses units by the rounded value', () => {
+    expect(formatBytes(1048575)).toBe('1.0 MiB');
+    expect(formatBytes(1023)).toBe('1023 B');
+    expect(formatBytes(1024)).toBe('1.0 KiB');
+    expect(formatDuration(0.99996)).toBe('1.000 s');
+    expect(formatDuration(0.9994)).toBe('999.4 ms');
+    expect(formatDuration(119.9996)).toBe('2 min 0 s');
+    expect(formatDuration(179.6)).toBe('3 min 0 s');
+    expect(formatDuration(7199.6)).toBe('2 h 0 min');
+  });
+
   it('formats endpoints, times and names', () => {
     expect(formatEndpoint('192.0.2.1', 443)).toBe('192.0.2.1:443');
     expect(formatEndpoint('2001:db8::1', 53)).toBe('[2001:db8::1]:53');

@@ -32,7 +32,9 @@ export function FilterBar({
   const inputId = useId();
   const statusId = useId();
   const [draft, setDraft] = useState(value);
-  const [check, setCheck] = useState<Check>({ text: value });
+  // Nothing is checked yet: a filter from the address shows "Checking…"
+  // until the server has answered.
+  const [check, setCheck] = useState<Check>({ text: '' });
   const [prevValue, setPrevValue] = useState(value);
   if (prevValue !== value) {
     // The applied filter changed elsewhere (for example, browser history).

@@ -632,6 +632,7 @@ pub async fn import_capture(
     responses((status = 200, description = "Totals", body = Overview))
 )]
 pub async fn overview(State(state): State<AppState>) -> Result<Json<Overview>, ApiError> {
+    let _slot = state.read_slot().await?;
     Ok(Json(state.storage.overview().await?))
 }
 
@@ -930,6 +931,7 @@ pub async fn list_alerts(
     let page = page_of(params.page, params.per_page)?;
     let sort = alert_sort(params.sort.as_deref())?;
     let filter = alert_filter(&params)?;
+    let _slot = state.read_slot().await?;
     require_session(&state, id).await?;
     Ok(Json(
         state.storage.list_alerts(id, page, sort, &filter).await?,
@@ -954,6 +956,7 @@ pub async fn get_alert(
     State(state): State<AppState>,
     ApiPath((id, alert_id)): ApiPath<(i64, i64)>,
 ) -> Result<Json<AlertRow>, ApiError> {
+    let _slot = state.read_slot().await?;
     state
         .storage
         .get_alert(id, alert_id)
@@ -985,11 +988,14 @@ pub async fn update_alert(
     ApiJson(update): ApiJson<AlertUpdate>,
 ) -> Result<Json<AlertRow>, ApiError> {
     let status = alert_status(&update.status)?;
-    let alert = state
-        .storage
-        .set_alert_status(id, alert_id, status)
-        .await?
-        .ok_or_else(|| ApiError::not_found("alert"))?;
+    let alert = {
+        let _slot = state.read_slot().await?;
+        state
+            .storage
+            .set_alert_status(id, alert_id, status)
+            .await?
+            .ok_or_else(|| ApiError::not_found("alert"))?
+    };
     tracing::info!(
         session_id = id,
         alert_id,

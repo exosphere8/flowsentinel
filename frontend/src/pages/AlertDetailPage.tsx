@@ -119,8 +119,8 @@ function AlertDetail({ id, alertId }: { id: number; alertId: number }) {
               ['Destination', formatEndpoint(alert.destination, alert.destination_port)],
             ]}
           />
-          <h3>Evidence</h3>
-          <table>
+          <h3 id="evidence-heading">Evidence</h3>
+          <table aria-labelledby="evidence-heading">
             <thead>
               <tr>
                 <th scope="col">Measurement</th>

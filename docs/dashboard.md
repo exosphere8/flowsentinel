@@ -33,8 +33,9 @@ shared and the browser's Back button restores it.
 ## How it works
 
 - **Server-side paging, sorting and filtering.** Tables request one page at a time
-  (`page`, `per_page`, `sort`, `filter`), so a capture with a million packets loads as fast as a
-  small one.
+  (`page`, `per_page`, `sort`, `filter`), so the browser holds one page however large the capture
+  is. A page number past the end (for example after deleting the last item on the last page)
+  offers a link to the last page instead of an empty table.
 - **Validated filters.** As a display filter is typed, the dashboard asks
   `GET /api/v1/filters/validate` whether it is valid (after a 300 ms pause). An invalid filter
   is marked with `aria-invalid`, its error and the position it points to are shown, and **Apply**
@@ -81,7 +82,10 @@ FLOWSENTINEL_DASHBOARD_DIR=frontend/dist make dev
 `make dashboard` runs the same `npm ci` and build. When `FLOWSENTINEL_DASHBOARD_DIR` is set,
 `api-server` serves the files in it at `/`, and answers paths without a file with `index.html`
 so that the dashboard's own routes load directly. It refuses to start if the directory has no
-`index.html`. Unknown `/api/v1/...` paths still get the API's JSON `404`, never the dashboard.
+`index.html`. Paths under `/api/` that the API does not know still get its JSON `404`, never the
+dashboard. `index.html` is sent with `Cache-Control: no-cache`, so a new build takes effect on the
+next load; the content-hashed files under `/assets/` are cached for a year, and a missing one is
+a `404` rather than the page.
 Without the variable, the server serves only the API.
 
 ### Development server
@@ -123,14 +127,15 @@ The API stores and returns no packet payloads (see [data-retention.md](data-rete
 dashboard adds a second guard: the protocol-layer view never renders fields named `payload`,
 `data`, `raw`, `bytes`, `hex`, `body`, `content` or `contents`, so a later API change cannot put
 packet contents on screen by accident. Payload sizes are shown as lengths only. The unit tests
-check this guard, and the end-to-end test checks that no payload marker from the synthetic
-fixtures appears on any page.
+check this guard. The end-to-end test opens a DNS packet (which has a payload), a flow and an
+alert, and checks that no payload marker from the synthetic fixtures appears on them.
 
 ## Accessibility
 
-- Every page has one `h1`, a "Skip to content" link and landmark regions, and the document title
+- Every loaded page has one `h1`, a "Skip to content" link and landmark regions, and the document title
   names the page.
-- Tables have captions or labels and scroll inside a labelled region on narrow screens.
+- Data tables sit in a labelled region that scrolls on narrow screens, or are labelled by their
+  section heading; chart tables have captions.
 - Status changes (filter validity, saved triage) are announced through live regions; errors use
   `role="alert"`.
 - Severity is shown as text as well as color.

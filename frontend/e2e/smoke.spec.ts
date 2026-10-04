@@ -58,15 +58,17 @@ test('import a capture and walk the dashboard', async ({ page }) => {
   await page.getByRole('button', { name: 'Apply' }).click();
   await expect(page).toHaveURL(/filter=dns/);
   await expect(page.getByText(/of 14$/)).toBeVisible();
+  // A DNS packet's protocol tree: it has a payload, which is never shown.
+  await page.getByRole('region', { name: 'Packets (table)' }).getByRole('link').first().click();
+  await expect(page.getByRole('heading', { name: /^Packet \d+$/ })).toBeVisible();
+  await expect(page.getByRole('list', { name: 'Protocol layers' })).toContainText('DNS');
+  await expectNoPayload(page);
+
+  // An invalid filter cannot be applied.
+  await page.goto(`${captureUrl}/packets`);
   await page.getByLabel('Display filter').fill('tcp.port == ');
   await expect(page.getByLabel('Display filter')).toHaveAttribute('aria-invalid', 'true');
   await expect(page.getByRole('button', { name: 'Apply' })).toBeDisabled();
-
-  // A packet's protocol tree.
-  await page.goto(`${captureUrl}/packets/3`);
-  await expect(page.getByRole('heading', { name: 'Packet 3' })).toBeVisible();
-  await expect(page.getByRole('list', { name: 'Protocol layers' })).toBeVisible();
-  await expectNoPayload(page);
 
   // Flows, filtered by their alerts.
   await page.goto(`${captureUrl}/flows?filter=${encodeURIComponent('alert.severity == high')}`);

@@ -4,7 +4,7 @@ import { ALERT_STATUSES, api, SEVERITIES, type AlertStatus, type Severity } from
 import { SeverityBadge, StatusBadge } from '../components/Badges';
 import { TableScroll } from '../components/Details';
 import { CaptureTabs, PageHeader } from '../components/Layout';
-import { Pagination } from '../components/Pagination';
+import { Pagination, PastEnd } from '../components/Pagination';
 import { EmptyState, ErrorState, HeuristicNotice, Loading } from '../components/States';
 import { formatEndpoint, formatTime, humanize } from '../lib/format';
 import { useResource } from '../lib/useResource';
@@ -106,6 +106,8 @@ function Alerts({ id }: { id: number }) {
         <ErrorState error={alerts.error} onRetry={alerts.reload} />
       ) : !shown ? (
         <Loading />
+      ) : shown.items.length === 0 && shown.total > 0 ? (
+        <PastEnd total={shown.total} perPage={PER_PAGE} onPage={(next) => search.update({ page: next })} />
       ) : shown.total === 0 ? (
         <EmptyState title={filtered ? 'No alerts match' : 'No alerts'}>
           {!filtered && (

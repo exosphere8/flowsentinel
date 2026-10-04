@@ -5,7 +5,7 @@ import { SeverityBadge } from '../components/Badges';
 import { TableScroll } from '../components/Details';
 import { FilterBar } from '../components/FilterBar';
 import { CaptureTabs, PageHeader } from '../components/Layout';
-import { Pagination } from '../components/Pagination';
+import { Pagination, PastEnd } from '../components/Pagination';
 import { EmptyState, ErrorState, Loading } from '../components/States';
 import { formatBytes, formatDuration, formatEndpoint, formatNumber, humanize } from '../lib/format';
 import { useResource } from '../lib/useResource';
@@ -67,6 +67,8 @@ function Flows({ id }: { id: number }) {
         <ErrorState error={flows.error} onRetry={flows.reload} />
       ) : !shown ? (
         <Loading />
+      ) : shown.items.length === 0 && shown.total > 0 ? (
+        <PastEnd total={shown.total} perPage={PER_PAGE} onPage={(next) => search.update({ page: next })} />
       ) : shown.total === 0 ? (
         <EmptyState title={filter ? 'No flows match' : 'No flows'} />
       ) : (

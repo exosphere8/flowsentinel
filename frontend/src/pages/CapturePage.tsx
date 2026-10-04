@@ -32,9 +32,14 @@ function CaptureSummary({ id }: { id: number }) {
 
   const detection = data.detection_summary;
   const bySeverity = field(detection, 'alerts_by_severity');
-  const warnings = data.capture_warnings
-    .map((warning) => field(warning, 'code'))
-    .filter((code): code is string => typeof code === 'string');
+  const warnings = data.capture_warnings.flatMap((warning) => {
+    const code = field(warning, 'code');
+    const message = field(warning, 'message');
+    const count = field(warning, 'count');
+    return typeof code === 'string'
+      ? [{ code, message: typeof message === 'string' ? message : '', count: typeof count === 'number' ? count : null }]
+      : [];
+  });
 
   return (
     <>
@@ -68,9 +73,11 @@ function CaptureSummary({ id }: { id: number }) {
             <>
               <h3>Capture warnings</h3>
               <ul>
-                {warnings.map((code) => (
-                  <li key={code}>
-                    <code>{code}</code>
+                {warnings.map((warning, i) => (
+                  <li key={`${warning.code}-${i}`}>
+                    <code>{warning.code}</code>
+                    {warning.count !== null && <> ×{formatNumber(warning.count)}</>}
+                    {warning.message && <>: {warning.message}</>}
                   </li>
                 ))}
               </ul>

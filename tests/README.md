@@ -45,6 +45,6 @@ The dashboard's tests live in `frontend/` (see [docs/dashboard.md](../docs/dashb
 | `frontend/src/api/client.test.ts` | The typed API client: query building, structured errors, uploads and JSON requests |
 | `frontend/src/lib/format.test.ts` | Number, byte, time and filter-position formatting |
 | `frontend/src/components/components.test.tsx` | Charts and their tables, paging, the filter bar's validation, the protocol tree's payload guard |
-| `frontend/src/pages/pages.test.tsx` | Every page against a mocked API: loading, error and empty states, filters, triage, deletion, axe-core accessibility checks |
+| `frontend/src/pages/pages.test.tsx` | Every page against a mocked API, each with an axe-core accessibility check; loading, error, empty and past-the-end states; filters, triage, deletion, retention validation |
 | `frontend/e2e/smoke.spec.ts` | Playwright: the built dashboard served by `api-server` with a real database; imports a fixture through the UI, walks every page, checks for console errors, CSP violations, payload markers and security headers |
 | `crates/api-server/tests/openapi.rs` | `docs/openapi.json`, from which the dashboard's API types are generated, matches the server |

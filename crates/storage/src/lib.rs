@@ -460,8 +460,9 @@ impl Storage {
     }
 
     /// Totals across every stored capture, alert counts and the newest
-    /// captures.
+    /// captures, all from one snapshot and under the query timeout.
     pub async fn overview(&self) -> Result<Overview, StorageError> {
+        let mut tx = self.read_transaction().await?;
         let totals = sqlx::query(
             "SELECT count(*) AS captures, \
              COALESCE(sum(packets_processed), 0)::BIGINT AS packets, \
@@ -469,12 +470,12 @@ impl Storage {
              COALESCE(sum(alerts_total), 0)::BIGINT AS alerts \
              FROM capture_sessions",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
         let groups = sqlx::query(
             "SELECT severity, status, count(*) AS n FROM alerts GROUP BY severity, status",
         )
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
         .await?;
         let mut overview = Overview {
             captures: totals.try_get("captures")?,
@@ -502,10 +503,17 @@ impl Storage {
                     .or_default() += n;
             }
         }
-        overview.recent_captures = self
-            .list_sessions(Page::new(1, 5), SessionSort::NewestFirst)
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM capture_sessions ORDER BY {} LIMIT 5",
+            SessionSort::NewestFirst.sql()
+        );
+        overview.recent_captures = sqlx::query(&sql)
+            .fetch_all(&mut *tx)
             .await?
-            .items;
+            .iter()
+            .map(session_from_row)
+            .collect::<Result<_, _>>()?;
+        tx.commit().await?;
         Ok(overview)
     }
 

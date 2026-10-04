@@ -141,7 +141,7 @@ pub fn app_with_state(state: AppState) -> Router {
         .route("/health", get(health))
         .nest("/api/v1", api);
     let router = match dashboard_dir {
-        Some(dir) => router.fallback_service(dashboard::service(&dir)),
+        Some(dir) => router.fallback_service(dashboard::router(&dir)),
         None => router.fallback(error::not_found),
     };
     dashboard::with_security_headers(

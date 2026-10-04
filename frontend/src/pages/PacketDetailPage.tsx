@@ -22,6 +22,9 @@ export function PacketDetailPage() {
 function PacketDetail({ id, index }: { id: number; index: number }) {
   useTitle(`Packet ${index}`);
   const packet = useResource(`packet:${id}:${index}`, (signal) => api.getPacket(id, index, signal));
+  // Only stored packets can be shown; the capture says how many there are.
+  const capture = useResource(`capture:${id}`, (signal) => api.getCapture(id, signal));
+  const stored = capture.data?.packets_stored ?? 0;
   const crumbs = [
     { label: 'Captures', to: '/captures' },
     { label: `Capture ${id}`, to: `/captures/${id}` },
@@ -48,7 +51,7 @@ function PacketDetail({ id, index }: { id: number; index: number }) {
       <CaptureTabs id={id} />
       <nav aria-label="Neighboring packets" className="toolbar">
         {index > 1 ? <Link to={`/captures/${id}/packets/${index - 1}`}>Previous packet</Link> : <span />}
-        <Link to={`/captures/${id}/packets/${index + 1}`}>Next packet</Link>
+        {index < stored ? <Link to={`/captures/${id}/packets/${index + 1}`}>Next packet</Link> : <span />}
       </nav>
       <div className="columns">
         <section className="card" aria-labelledby="summary-heading">

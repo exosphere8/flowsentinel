@@ -81,6 +81,16 @@ describe('Captures', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(true);
   });
 
+  it('offers the last page when the address points past the end', async () => {
+    mockApi([['GET', /\/captures\?/, (call) => ({ body: call.url.includes('page=3') ? paged([], 3, 25, 1) : paged([session], 1, 25, 1) })]]);
+    const { router } = renderAt('/captures?page=3');
+    expect(await screen.findByText('This page is past the end')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Captures (table)' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Go to the last page' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?page=1'));
+    expect(await screen.findByRole('link', { name: 'detect-mixed.pcap' })).toBeInTheDocument();
+  });
+
   it('shows errors with a retry', async () => {
     let fail = true;
     mockApi([
@@ -207,11 +217,28 @@ describe('Packets', () => {
   });
 
   it('shows a packet as a protocol tree without payload', async () => {
-    mockApi([['GET', /\/captures\/7\/packets\/3$/, () => ({ body: packetDetail })]]);
-    renderAt('/captures/7/packets/3');
+    mockApi([
+      ['GET', /\/captures\/7\/packets\/3$/, () => ({ body: packetDetail })],
+      ['GET', /\/captures\/7$/, () => ({ body: sessionDetail })],
+    ]);
+    const { container } = renderAt('/captures/7/packets/3');
     expect(await screen.findByRole('heading', { name: 'Packet 3', level: 1 })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Next packet' })).toHaveAttribute('href', '/captures/7/packets/4');
+    expect(screen.getByRole('link', { name: 'Previous packet' })).toHaveAttribute('href', '/captures/7/packets/2');
+    expect(await axeViolations(container)).toEqual([]);
     expect(screen.getByText('IPV4')).toBeInTheDocument();
     expect(screen.getByText(/Payload bytes are never stored or shown/)).toBeInTheDocument();
+  });
+
+  it('offers no next packet after the last stored one', async () => {
+    mockApi([
+      ['GET', /\/captures\/7\/packets\/3$/, () => ({ body: packetDetail })],
+      ['GET', /\/captures\/7$/, () => ({ body: { ...sessionDetail, packets_stored: 3 } })],
+    ]);
+    renderAt('/captures/7/packets/3');
+    expect(await screen.findByRole('heading', { name: 'Packet 3', level: 1 })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('link', { name: 'Previous packet' })).toBeInTheDocument());
+    expect(screen.queryByRole('link', { name: 'Next packet' })).not.toBeInTheDocument();
   });
 
   it('says when a packet does not exist', async () => {
@@ -250,8 +277,9 @@ describe('Alerts', () => {
       ['GET', /\/rules$/, () => ({ body: rules })],
       ['GET', /\/captures\/7\/alerts\?/, () => ({ body: paged([alert]) })],
     ]);
-    const { router } = renderAt('/captures/7/alerts');
+    const { container, router } = renderAt('/captures/7/alerts');
     expect(await screen.findByRole('link', { name: 'Regular repeated connections' })).toBeInTheDocument();
+    expect(await axeViolations(container)).toEqual([]);
     await userEvent.selectOptions(screen.getByLabelText('Severity'), 'high');
     await waitFor(() => expect(router.state.location.search).toBe('?severity=high'));
     await waitFor(() => expect(calls.some((c) => c.url.includes('severity=high'))).toBe(true));
@@ -281,9 +309,29 @@ describe('Settings', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('refuses an empty or non-numeric retention value instead of saving 0', async () => {
+    const { calls } = mockApi([
+      ['GET', /\/settings\/retention$/, () => ({ body: { session_ttl_days: 30, max_packets_stored: 100000 } })],
+      ['GET', /\/rules$/, () => ({ body: rules })],
+      ['GET', /\/filters\/fields/, () => ({ body: [] })],
+    ]);
+    renderAt('/settings');
+    const packets = await screen.findByLabelText('Packets stored per capture');
+    await userEvent.clear(packets);
+    expect(screen.getByText('Enter a whole number from 0 to 1000000.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save retention' })).toBeDisabled();
+    await userEvent.type(packets, '0');
+    expect(screen.getByRole('button', { name: 'Save retention' })).toBeEnabled();
+    const ttl = screen.getByLabelText('Keep captures for (days)');
+    await userEvent.clear(ttl);
+    expect(screen.getByRole('button', { name: 'Save retention' })).toBeDisabled();
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false);
+  });
+
   it('shows a not-found page for unknown addresses', async () => {
     mockApi([]);
-    renderAt('/nowhere');
+    const { container } = renderAt('/nowhere');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
+    expect(await axeViolations(container)).toEqual([]);
   });
 });

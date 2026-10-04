@@ -16,7 +16,9 @@ export function formatBytes(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value) || value < 0) return DASH;
   let size = value;
   let unit = 0;
-  while (size >= 1024 && unit < UNITS.length - 1) {
+  // Compare the value as it will be shown, so 1023.96 KiB becomes 1.0 MiB.
+  const shown = () => (unit === 0 ? size : Number(size.toFixed(1)));
+  while (shown() >= 1024 && unit < UNITS.length - 1) {
     size /= 1024;
     unit += 1;
   }
@@ -27,10 +29,12 @@ export function formatDuration(seconds: number | null | undefined): string {
   if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) {
     return DASH;
   }
-  if (seconds < 1) return `${(seconds * 1000).toFixed(1)} ms`;
-  if (seconds < 120) return `${seconds.toFixed(3)} s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 120) return `${minutes} min ${Math.round(seconds - minutes * 60)} s`;
+  // Each unit is chosen by the rounded value, so 0.99996 s is not "1000.0 ms".
+  if (Number((seconds * 1000).toFixed(1)) < 1000) return `${(seconds * 1000).toFixed(1)} ms`;
+  if (Number(seconds.toFixed(3)) < 120) return `${seconds.toFixed(3)} s`;
+  const total = Math.round(seconds);
+  const minutes = Math.floor(total / 60);
+  if (minutes < 120) return `${minutes} min ${total - minutes * 60} s`;
   const hours = Math.floor(minutes / 60);
   return `${hours} h ${minutes - hours * 60} min`;
 }

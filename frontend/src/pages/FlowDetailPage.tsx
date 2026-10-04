@@ -102,7 +102,7 @@ function FlowDetail({ id, flowId }: { id: number; flowId: number }) {
         </section>
         <section className="card" aria-labelledby="directions-heading">
           <h2 id="directions-heading">Directions</h2>
-          <table>
+          <table aria-labelledby="directions-heading">
             <thead>
               <tr>
                 <th scope="col">Direction</th>

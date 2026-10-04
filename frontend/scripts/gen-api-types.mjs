@@ -97,6 +97,14 @@ for (const name of names) {
   const schema = schemas[name];
   out += '\n';
   const paged = /^Paged_(.+)$/.exec(name);
+  if (paged) {
+    // The hand-written Paged<T> above must match every page envelope.
+    const fields = ['items', 'page', 'per_page', 'total'];
+    const same = (list) => JSON.stringify([...(list ?? [])].sort()) === JSON.stringify(fields);
+    if (!same(Object.keys(schema.properties ?? {})) || !same(schema.required)) {
+      throw new Error(`${name} no longer has exactly ${fields.join(', ')}; update Paged<T> in this script`);
+    }
+  }
   if (paged && schemas[paged[1]]) {
     out += `export type ${name} = Paged<${paged[1]}>;\n`;
     continue;

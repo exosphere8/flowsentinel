@@ -4,7 +4,7 @@ import { Link, useNavigate } from 'react-router';
 import { api, ApiError, toApiError } from '../api/client';
 import { TableScroll } from '../components/Details';
 import { PageHeader } from '../components/Layout';
-import { Pagination } from '../components/Pagination';
+import { Pagination, PastEnd } from '../components/Pagination';
 import { EmptyState, ErrorState, Loading } from '../components/States';
 import { formatBytes, formatNumber, formatTime, humanize } from '../lib/format';
 import { useResource } from '../lib/useResource';
@@ -155,6 +155,8 @@ export function CapturesPage() {
           <ErrorState error={captures.error} onRetry={captures.reload} />
         ) : !shown ? (
           <Loading />
+        ) : shown.items.length === 0 && shown.total > 0 ? (
+          <PastEnd total={shown.total} perPage={PER_PAGE} onPage={(next) => search.update({ page: next })} />
         ) : shown.total === 0 ? (
           <EmptyState title="No captures yet">
             <p>Import a .pcap file above.</p>

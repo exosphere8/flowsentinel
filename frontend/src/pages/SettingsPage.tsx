@@ -8,6 +8,15 @@ import { ErrorState, HeuristicNotice, Loading } from '../components/States';
 import { useResource } from '../lib/useResource';
 import { useTitle } from '../lib/useTitle';
 
+/**
+ * The value of a whole-number field, or null when it is empty or not a
+ * plain number. (`Number('')` is 0, which would be a valid setting.)
+ */
+function wholeNumber(text: string): number | null {
+  const trimmed = text.trim();
+  return /^\d{1,9}$/.test(trimmed) ? Number(trimmed) : null;
+}
+
 function RetentionForm({ settings }: { settings: RetentionSettings }) {
   const ttlId = useId();
   const packetsId = useId();
@@ -16,18 +25,18 @@ function RetentionForm({ settings }: { settings: RetentionSettings }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const ttlValue = Number(ttl);
-  const packetsValue = Number(packets);
+  const ttlValue = wholeNumber(ttl);
+  const packetsValue = wholeNumber(packets);
   const ttlError =
-    Number.isInteger(ttlValue) && ttlValue >= 1 && ttlValue <= 3650 ? null : 'Enter a whole number from 1 to 3650.';
+    ttlValue !== null && ttlValue >= 1 && ttlValue <= 3650 ? null : 'Enter a whole number from 1 to 3650.';
   const packetsError =
-    Number.isInteger(packetsValue) && packetsValue >= 0 && packetsValue <= 1_000_000
+    packetsValue !== null && packetsValue >= 0 && packetsValue <= 1_000_000
       ? null
       : 'Enter a whole number from 0 to 1000000.';
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (ttlError || packetsError) return;
+    if (ttlError || packetsError || ttlValue === null || packetsValue === null) return;
     setBusy(true);
     setMessage(null);
     try {

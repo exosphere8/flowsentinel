@@ -87,6 +87,33 @@ describe('FilterBar', () => {
     expect(onApply).toHaveBeenCalledWith('tcp');
   });
 
+  it('treats a filter from the address as unchecked until the server answers', async () => {
+    let answer: () => void = () => {};
+    const answered = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+    mockApi([
+      [
+        'GET',
+        /filters\/validate/,
+        async () => {
+          await answered;
+          return {
+            status: 400,
+            body: { error: { code: 'syntax_error', message: 'a value is missing', position: { start: 12, end: 12 } } },
+          };
+        },
+      ],
+    ]);
+    render(<FilterBar target="packets" value="tcp.port ==" onApply={vi.fn()} />);
+    expect(screen.getByText('Checking…')).toBeInTheDocument();
+    expect(screen.queryByText(/Valid filter/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    answer();
+    expect(await screen.findByText('a value is missing')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+  });
+
   it('applies an empty filter to clear it', async () => {
     mockApi([]);
     const onApply = vi.fn();
