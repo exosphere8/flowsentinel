@@ -1,0 +1,20 @@
+[package]
+name = "filter-language"
+description = "FlowSentinel display-filter language: lexer, parser, type checker and parameterized SQL translation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

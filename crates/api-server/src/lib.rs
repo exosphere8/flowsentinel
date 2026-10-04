@@ -45,6 +45,8 @@ pub const ALLOWED_HOSTS_ENV_VAR: &str = "FLOWSENTINEL_ALLOWED_HOSTS";
 pub const MAX_PACKETS_ENV_VAR: &str = "FLOWSENTINEL_MAX_PACKETS";
 /// Processing time per import analysis pass, in seconds.
 pub const MAX_ANALYSIS_SECONDS_ENV_VAR: &str = "FLOWSENTINEL_MAX_ANALYSIS_SECONDS";
+/// Time limit for one filtered list query, in seconds.
+pub const QUERY_TIMEOUT_ENV_VAR: &str = "FLOWSENTINEL_QUERY_TIMEOUT_SECONDS";
 
 /// Default listen address: loopback only, so a fresh install is not reachable
 /// from the network.
@@ -55,6 +57,7 @@ pub const DEFAULT_MAX_IMPORTS: usize = 2;
 pub const DEFAULT_DB_CONNECTIONS: u32 = 10;
 pub const DEFAULT_MAX_PACKETS: u64 = 1_000_000;
 pub const DEFAULT_MAX_ANALYSIS_SECONDS: u64 = 600;
+pub const DEFAULT_QUERY_TIMEOUT_SECONDS: u64 = 10;
 
 /// Largest JSON request body (only the retention settings take one).
 const MAX_JSON_BODY_BYTES: usize = 16 * 1024;
@@ -107,6 +110,8 @@ pub fn app_with_state(state: AppState) -> Router {
             "/settings/retention",
             get(routes::get_retention).put(routes::put_retention),
         )
+        .route("/filters/validate", get(routes::validate_filter))
+        .route("/filters/fields", get(routes::filter_fields))
         .route("/openapi.json", get(openapi_json))
         // Uploads stream their raw body under their own limit; this caps
         // everything read through the JSON extractor.
@@ -140,6 +145,7 @@ pub struct Config {
     pub allowed_hosts: Option<host::HostPolicy>,
     pub max_packets: u64,
     pub max_analysis_seconds: u64,
+    pub query_timeout_seconds: u64,
 }
 
 impl fmt::Debug for Config {
@@ -157,6 +163,7 @@ impl fmt::Debug for Config {
             .field("allowed_hosts", &self.allowed_hosts)
             .field("max_packets", &self.max_packets)
             .field("max_analysis_seconds", &self.max_analysis_seconds)
+            .field("query_timeout_seconds", &self.query_timeout_seconds)
             .finish()
     }
 }
@@ -198,6 +205,7 @@ impl Default for Config {
             allowed_hosts: None,
             max_packets: DEFAULT_MAX_PACKETS,
             max_analysis_seconds: DEFAULT_MAX_ANALYSIS_SECONDS,
+            query_timeout_seconds: DEFAULT_QUERY_TIMEOUT_SECONDS,
         }
     }
 }
@@ -294,6 +302,13 @@ impl Config {
             ),
             _ => None,
         };
+        let query_timeout_seconds = number(
+            &lookup,
+            QUERY_TIMEOUT_ENV_VAR,
+            DEFAULT_QUERY_TIMEOUT_SECONDS,
+            1,
+            300,
+        )?;
         let upload_dir = lookup(UPLOAD_DIR_ENV_VAR)
             .map(|raw| raw.trim().to_owned())
             .filter(|raw| !raw.is_empty())
@@ -308,6 +323,7 @@ impl Config {
             allowed_hosts,
             max_packets,
             max_analysis_seconds,
+            query_timeout_seconds,
         })
     }
 }
@@ -377,6 +393,8 @@ mod tests {
             (MAX_PACKETS_ENV_VAR, "1000001"),
             (MAX_ANALYSIS_SECONDS_ENV_VAR, "0"),
             (ALLOWED_HOSTS_ENV_VAR, "bad host"),
+            (QUERY_TIMEOUT_ENV_VAR, "0"),
+            (QUERY_TIMEOUT_ENV_VAR, "301"),
         ] {
             let err = Config::from_lookup(lookup_with(&[(variable, bad)])).unwrap_err();
             assert!(err.to_string().contains(variable), "{err}");

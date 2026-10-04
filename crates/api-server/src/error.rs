@@ -15,6 +15,17 @@ pub struct ErrorBody {
     pub code: String,
     /// Human-readable explanation.
     pub message: String,
+    /// For filter errors: the byte range `[start, end)` of the problem in
+    /// the filter text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<Position>,
+}
+
+/// A byte range in a request value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+pub struct Position {
+    pub start: usize,
+    pub end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, ToSchema)]
@@ -31,6 +42,7 @@ pub struct ApiError {
     pub status: StatusCode,
     pub code: &'static str,
     pub message: String,
+    pub position: Option<Position>,
 }
 
 impl ApiError {
@@ -44,7 +56,18 @@ impl ApiError {
             status,
             code,
             message,
+            position: None,
         }
+    }
+
+    /// An invalid display filter, pointing at the problem when possible.
+    pub fn filter(err: &filter_language::FilterError) -> Self {
+        let mut api = Self::bad_request(err.code(), format!("invalid filter: {err}"));
+        api.position = err.span().map(|span| Position {
+            start: span.start,
+            end: span.end,
+        });
+        api
     }
 
     pub fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
@@ -83,6 +106,14 @@ impl From<storage::StorageError> for ApiError {
     fn from(err: storage::StorageError) -> Self {
         match &err {
             storage::StorageError::Connection(_) => Self::unavailable(&err),
+            storage::StorageError::QueryTimeout => {
+                tracing::warn!("list query cancelled at the time limit");
+                Self::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "query_timeout",
+                    "the query took longer than the time limit; narrow the filter and try again",
+                )
+            }
             _ => Self::internal("storage", &err),
         }
     }
@@ -94,6 +125,7 @@ impl IntoResponse for ApiError {
             error: ErrorBody {
                 code: self.code.to_owned(),
                 message: self.message,
+                position: self.position,
             },
         };
         (self.status, Json(body)).into_response()
@@ -117,6 +149,13 @@ pub async fn method_not_allowed() -> ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_timeouts_are_reported_as_such() {
+        let err = ApiError::from(storage::StorageError::QueryTimeout);
+        assert_eq!(err.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.code, "query_timeout");
+    }
 
     #[test]
     fn long_messages_are_cut() {

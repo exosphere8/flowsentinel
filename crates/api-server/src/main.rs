@@ -74,7 +74,9 @@ async fn main() -> ExitCode {
     }
 
     let storage = match Storage::connect(database_url, config.db_max_connections).await {
-        Ok(storage) => storage,
+        Ok(storage) => {
+            storage.with_query_timeout(Duration::from_secs(config.query_timeout_seconds))
+        }
         Err(err) => {
             tracing::error!(error = %err, "cannot connect to PostgreSQL");
             return ExitCode::FAILURE;

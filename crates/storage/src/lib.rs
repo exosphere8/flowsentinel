@@ -14,7 +14,7 @@ pub mod testing;
 use std::time::Duration;
 
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
-use sqlx::{Postgres, QueryBuilder, Row};
+use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use ingest::{ImportMeta, ImportTransaction, PacketRow};
 pub use models::{
@@ -36,13 +36,21 @@ pub enum StorageError {
     Query(#[source] sqlx::Error),
     #[error("stored data is inconsistent: {0}")]
     Corrupt(&'static str),
+    #[error("the query took longer than the time limit")]
+    QueryTimeout,
 }
+
+/// PostgreSQL's `query_canceled` (statement timeout).
+const QUERY_CANCELED: &str = "57014";
 
 impl From<sqlx::Error> for StorageError {
     fn from(err: sqlx::Error) -> Self {
         match err {
             sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed | sqlx::Error::Io(_) => {
                 Self::Connection(err)
+            }
+            sqlx::Error::Database(ref db) if db.code().as_deref() == Some(QUERY_CANCELED) => {
+                Self::QueryTimeout
             }
             other => Self::Query(other),
         }
@@ -169,6 +177,24 @@ pub trait SqlCondition: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct Storage {
     pool: PgPool,
+    query_timeout: Duration,
+}
+
+/// Default limit for one filtered list query.
+pub const DEFAULT_QUERY_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Rows of `table` in a session that satisfy `condition`.
+async fn count<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    table: &'static str,
+    session_id: i64,
+    condition: Option<&dyn SqlCondition>,
+) -> Result<i64, StorageError> {
+    let mut builder =
+        QueryBuilder::<Postgres>::new(format!("SELECT count(*) FROM {table} WHERE session_id = "));
+    builder.push_bind(session_id);
+    push_condition(&mut builder, condition);
+    Ok(builder.build_query_scalar().fetch_one(executor).await?)
 }
 
 /// RFC 3339 UTC text for a TIMESTAMPTZ column, computed by the database.
@@ -292,20 +318,44 @@ impl Storage {
             .connect(database_url)
             .await
             .map_err(StorageError::Connection)?;
-        Ok(Self { pool })
+        Ok(Self::from_pool(pool))
     }
 
     pub fn from_pool(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            query_timeout: DEFAULT_QUERY_TIMEOUT,
+        }
     }
 
-    pub fn pool(&self) -> &PgPool {
-        &self.pool
+    /// Sets the time limit for list queries that take a filter condition.
+    pub fn with_query_timeout(mut self, timeout: Duration) -> Self {
+        self.query_timeout = timeout.max(Duration::from_millis(1));
+        self
     }
 
     /// Connections in the pool.
     pub fn max_connections(&self) -> u32 {
         self.pool.options().get_max_connections()
+    }
+
+    /// A read-only transaction whose statements are cancelled after the
+    /// query timeout, so one expensive filter cannot hold a connection for
+    /// long. The count and the page come from the same snapshot.
+    async fn read_transaction(&self) -> Result<Transaction<'static, Postgres>, StorageError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SET TRANSACTION READ ONLY")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SELECT set_config('statement_timeout', $1, true)")
+            .bind(self.query_timeout.as_millis().to_string())
+            .execute(&mut *tx)
+            .await?;
+        Ok(tx)
+    }
+
+    pub fn pool(&self) -> &PgPool {
+        &self.pool
     }
 
     /// Applies pending migrations. Already-applied migrations are verified
@@ -393,7 +443,8 @@ impl Storage {
         sort: PacketSort,
         condition: Option<&dyn SqlCondition>,
     ) -> Result<Paged<PacketSummary>, StorageError> {
-        let total = self.count("packets", session_id, condition).await?;
+        let mut tx = self.read_transaction().await?;
+        let total = count(&mut *tx, "packets", session_id, condition).await?;
         let mut builder = QueryBuilder::<Postgres>::new(format!(
             "SELECT {PACKET_COLUMNS} FROM packets WHERE session_id = "
         ));
@@ -403,7 +454,8 @@ impl Storage {
         builder.push_bind(page.limit());
         builder.push(" OFFSET ");
         builder.push_bind(page.offset());
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let rows = builder.build().fetch_all(&mut *tx).await?;
+        tx.commit().await?;
         let items = rows.iter().map(packet_from_row).collect::<Result<_, _>>()?;
         Ok(page.wrap(items, total))
     }
@@ -440,7 +492,8 @@ impl Storage {
         sort: FlowSort,
         condition: Option<&dyn SqlCondition>,
     ) -> Result<Paged<FlowSummaryRow>, StorageError> {
-        let total = self.count("flows", session_id, condition).await?;
+        let mut tx = self.read_transaction().await?;
+        let total = count(&mut *tx, "flows", session_id, condition).await?;
         let mut builder = QueryBuilder::<Postgres>::new(format!(
             "SELECT {FLOW_COLUMNS} FROM flows WHERE session_id = "
         ));
@@ -450,7 +503,8 @@ impl Storage {
         builder.push_bind(page.limit());
         builder.push(" OFFSET ");
         builder.push_bind(page.offset());
-        let rows = builder.build().fetch_all(&self.pool).await?;
+        let rows = builder.build().fetch_all(&mut *tx).await?;
+        tx.commit().await?;
         let items = rows.iter().map(flow_from_row).collect::<Result<_, _>>()?;
         Ok(page.wrap(items, total))
     }
@@ -485,12 +539,7 @@ impl Storage {
         session_id: i64,
         condition: Option<&dyn SqlCondition>,
     ) -> Result<i64, StorageError> {
-        let mut builder = QueryBuilder::<Postgres>::new(format!(
-            "SELECT count(*) FROM {table} WHERE session_id = "
-        ));
-        builder.push_bind(session_id);
-        push_condition(&mut builder, condition);
-        Ok(builder.build_query_scalar().fetch_one(&self.pool).await?)
+        count(&self.pool, table, session_id, condition).await
     }
 
     pub async fn list_dns_events(

@@ -600,3 +600,214 @@ async fn partial_imports_report_a_stable_completion_state() {
     assert_eq!(capture["packets_processed"], 5);
     h.finish().await;
 }
+
+fn encode(text: &str) -> String {
+    let mut out = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    out
+}
+
+#[tokio::test]
+async fn display_filters_select_matching_rows() {
+    let Some(h) = Harness::new("api_filters", 1024 * 1024).await else {
+        return;
+    };
+    let id = h.upload_fixture("flows-mixed.pcap").await;
+    let total = |kind: &'static str, filter: &'static str| {
+        let uri = format!(
+            "/api/v1/captures/{id}/{kind}?per_page=500&filter={}",
+            encode(filter)
+        );
+        let h = &h;
+        async move {
+            let (status, body) = h.get(&uri).await;
+            assert_eq!(status, StatusCode::OK, "{filter}: {body}");
+            body["total"].as_i64().unwrap()
+        }
+    };
+    assert_eq!(total("packets", "tls.sni == \"www.example.com\"").await, 2);
+    assert_eq!(total("packets", "TLS.SNI contains \"EXAMPLE\"").await, 2);
+    assert_eq!(total("packets", "ip.addr == 192.0.2.53").await, 2);
+    assert_eq!(total("packets", "ip.src == 192.0.2.0/24 and tcp").await, 7);
+    assert_eq!(total("packets", "udp and not dns").await, 5);
+    assert_eq!(total("packets", "tcp.flags.syn").await, 3);
+    assert_eq!(total("packets", "arp or ipv6").await, 3);
+    assert_eq!(total("packets", "not ip").await, 1);
+    assert_eq!(
+        total("packets", "dns.qry.name == \"www.example.com\"").await,
+        2
+    );
+    assert_eq!(total("packets", "").await, 19);
+    assert_eq!(total("flows", "flow.bytes > 1000").await, 1);
+    assert_eq!(total("flows", "udp && flow.packets >= 2").await, 3);
+    assert_eq!(total("flows", "flow.end_reason == idle_timeout").await, 3);
+    assert_eq!(
+        total("flows", "flow.state == reset or flow.state == closed").await,
+        2
+    );
+    assert_eq!(total("flows", "tls.sni == \"www.example.com\"").await, 1);
+    assert_eq!(total("flows", "flow.duration >= 1").await, 1);
+
+    // Port fields never match flows without ports (ICMPv6, ESP, fragments),
+    // just as they never match such packets.
+    let ipv6 = h.upload_fixture("decode-ipv6.pcap").await;
+    for filter in ["port == 0", "port != 9", "flow.initiator_port < 1024"] {
+        let (_, flows) = h
+            .get(&format!(
+                "/api/v1/captures/{ipv6}/flows?per_page=500&filter={}",
+                encode(filter)
+            ))
+            .await;
+        for flow in flows["items"].as_array().unwrap() {
+            assert!(
+                flow["protocol"] == 6 || flow["protocol"] == 17,
+                "{filter}: {flow}"
+            );
+        }
+    }
+    let (_, portless) = h
+        .get(&format!(
+            "/api/v1/captures/{ipv6}/flows?per_page=500&filter={}",
+            encode("port == 0")
+        ))
+        .await;
+    assert_eq!(portless["total"], 0);
+
+    // The filter is not trimmed, so positions match /filters/validate.
+    let (_, body) = h
+        .get(&format!(
+            "/api/v1/captures/{id}/packets?filter={}",
+            encode("   nosuch == 1")
+        ))
+        .await;
+    assert_eq!(body["error"]["position"], json!({"start": 3, "end": 9}));
+    let (_, blank) = h
+        .get(&format!("/api/v1/captures/{id}/packets?filter=%20%20"))
+        .await;
+    assert_eq!(blank["total"], 19);
+
+    // A filter combines with flow_id.
+    let (_, both) = h
+        .get(&format!(
+            "/api/v1/captures/{id}/packets?flow_id=2&filter={}",
+            encode("tcp.flags.fin")
+        ))
+        .await;
+    assert_eq!(both["total"], 2);
+
+    // Errors say what and where.
+    let (status, body) = h
+        .get(&format!(
+            "/api/v1/captures/{id}/packets?filter={}",
+            encode("tcp.port == 443 and nosuch == 1")
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(error_code(&body), "unknown_field");
+    assert_eq!(body["error"]["position"], json!({"start": 20, "end": 26}));
+    let (_, body) = h
+        .get(&format!(
+            "/api/v1/captures/{id}/flows?filter={}",
+            encode("frame.len > 10")
+        ))
+        .await;
+    assert_eq!(
+        error_code(&body),
+        "unknown_field",
+        "packet fields are not flow fields"
+    );
+
+    // Quoted text is a parameter, never SQL.
+    for attempt in [
+        "http.host == \"x' OR '1'='1\"",
+        "dns.qry.name contains \"'); DROP TABLE packets; --\"",
+    ] {
+        assert_eq!(total("packets", attempt).await, 0, "{attempt}");
+    }
+    assert_eq!(total("packets", "").await, 19);
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn filters_can_be_validated_and_fields_listed() {
+    let Some(h) = Harness::new("api_filter_meta", 1024).await else {
+        return;
+    };
+    let (status, body) = h
+        .get(&format!(
+            "/api/v1/filters/validate?target=packets&filter={}",
+            encode("TCP.Port==443 && !dns")
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["valid"], true);
+    assert_eq!(body["normalized"], "tcp.port == 443 and not dns");
+    assert_eq!(body["parameters"], 2);
+
+    for (filter, code) in [
+        ("tcp.port == 99999", "invalid_value"),
+        ("(tcp", "syntax_error"),
+        ("http.host == \"unterminated", "unterminated_string"),
+        ("ip.src > 192.0.2.1", "invalid_operator"),
+    ] {
+        let (status, body) = h
+            .get(&format!(
+                "/api/v1/filters/validate?target=packets&filter={}",
+                encode(filter)
+            ))
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{filter}");
+        assert_eq!(error_code(&body), code, "{filter}");
+        assert!(body["error"]["position"].is_object(), "{filter}: {body}");
+    }
+    let long = "a or ".repeat(300);
+    let (_, body) = h
+        .get(&format!(
+            "/api/v1/filters/validate?target=packets&filter={}",
+            encode(&long)
+        ))
+        .await;
+    assert_eq!(error_code(&body), "filter_too_long");
+    let (status, body) = h
+        .get("/api/v1/filters/validate?target=alerts&filter=tcp")
+        .await;
+    assert_eq!(
+        (status, error_code(&body)),
+        (StatusCode::BAD_REQUEST, "invalid_target")
+    );
+
+    let (status, fields) = h.get("/api/v1/filters/fields?target=flows").await;
+    assert_eq!(status, StatusCode::OK);
+    let bytes = fields
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "flow.bytes")
+        .unwrap();
+    assert_eq!(bytes["type"], "unsigned integer");
+    assert!(
+        bytes["operators"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(">="))
+    );
+    let state = fields
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "flow.state")
+        .unwrap();
+    assert!(
+        state["values"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("established"))
+    );
+    h.finish().await;
+}

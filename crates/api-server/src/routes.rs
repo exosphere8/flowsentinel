@@ -10,7 +10,8 @@ use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use capture::{CaptureError, ErrorCategory, MonotonicClock, display_file_name};
-use serde::Deserialize;
+use filter_language::{CompiledFilter, FieldType, Param, Piece, Target, compile};
+use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder};
 use storage::{
     DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent, ImportMeta, PacketDetail, PacketRow,
@@ -91,6 +92,9 @@ pub struct PacketListParams {
     pub sort: Option<String>,
     /// Only packets of this flow.
     pub flow_id: Option<i64>,
+    /// Display filter over packet fields, for example
+    /// `tcp.port == 443 and not ip.addr == 192.0.2.0/24`.
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -105,6 +109,56 @@ pub struct FlowListParams {
     pub per_page: Option<u32>,
     /// `start` (default), `-bytes`, `-packets` or `-duration`.
     pub sort: Option<String>,
+    /// Display filter over flow fields, for example `flow.bytes > 1000000`.
+    pub filter: Option<String>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct FilterParams {
+    /// `packets` or `flows`.
+    pub target: String,
+    /// The filter to check.
+    pub filter: String,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
+pub struct TargetParams {
+    /// `packets` or `flows`.
+    pub target: String,
+}
+
+/// A valid filter.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FilterCheck {
+    pub valid: bool,
+    pub target: &'static str,
+    /// The filter in canonical form (keywords lowercased, values quoted).
+    pub normalized: String,
+    /// Values bound as query parameters.
+    pub parameters: usize,
+}
+
+/// One filterable field.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct FilterField {
+    pub name: &'static str,
+    /// `ip address or cidr`, `unsigned integer`, `number`, `text`,
+    /// `keyword` or `boolean`.
+    #[serde(rename = "type")]
+    pub field_type: &'static str,
+    pub description: &'static str,
+    /// Operators the field accepts.
+    pub operators: Vec<&'static str>,
+    /// Allowed values, for keyword fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<&'static str>>,
+    /// Largest allowed value, for integer fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, IntoParams)]
@@ -158,14 +212,93 @@ async fn require_session(state: &AppState, id: i64) -> Result<(), ApiError> {
     }
 }
 
-/// `flow_id = $n`.
-struct FlowIs(i64);
+/// The conditions of one list request, all of which must hold.
+#[derive(Default)]
+struct Conditions {
+    flow_id: Option<i64>,
+    filter: Option<CompiledFilter>,
+}
 
-impl SqlCondition for FlowIs {
-    fn push(&self, builder: &mut QueryBuilder<'_, Postgres>) {
-        builder.push("flow_id = ");
-        builder.push_bind(self.0);
+impl Conditions {
+    fn as_condition(&self) -> Option<&dyn SqlCondition> {
+        let empty = self.flow_id.is_none() && self.filter.is_none();
+        (!empty).then_some(self as &dyn SqlCondition)
     }
+}
+
+impl SqlCondition for Conditions {
+    fn push(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        builder.push("TRUE");
+        if let Some(flow_id) = self.flow_id {
+            builder.push(" AND flow_id = ");
+            builder.push_bind(flow_id);
+        }
+        if let Some(filter) = &self.filter {
+            // Translated pieces are fixed SQL text and bound parameters.
+            builder.push(" AND (");
+            for piece in &filter.pieces {
+                match piece {
+                    Piece::Sql(text) => {
+                        builder.push(*text);
+                    }
+                    Piece::Param(Param::Text(text)) => {
+                        builder.push_bind(text.clone());
+                    }
+                    Piece::Param(Param::Int(value)) => {
+                        builder.push_bind(*value);
+                    }
+                    Piece::Param(Param::Float(value)) => {
+                        builder.push_bind(*value);
+                    }
+                }
+            }
+            builder.push(")");
+        }
+    }
+}
+
+fn target_of(value: &str) -> Result<Target, ApiError> {
+    match value {
+        "packets" => Ok(Target::Packets),
+        "flows" => Ok(Target::Flows),
+        _ => Err(ApiError::bad_request(
+            "invalid_target",
+            "target must be packets or flows",
+        )),
+    }
+}
+
+/// Compiles an optional filter; a blank filter means none. The text is not
+/// trimmed, so error positions match what the client sent and what
+/// `/filters/validate` reports.
+fn compile_filter(text: Option<&str>, target: Target) -> Result<Option<CompiledFilter>, ApiError> {
+    match text {
+        None => Ok(None),
+        Some(text) if text.chars().all(|c| c.is_ascii_whitespace()) => Ok(None),
+        Some(text) => compile(text, target)
+            .map(Some)
+            .map_err(|err| ApiError::filter(&err)),
+    }
+}
+
+/// A permit to run a filtered list query, or `429` when too many run.
+fn filter_permit(
+    state: &AppState,
+    filter: Option<&CompiledFilter>,
+) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, ApiError> {
+    if filter.is_none() {
+        return Ok(None);
+    }
+    Arc::clone(&state.filter_slots)
+        .try_acquire_owned()
+        .map(Some)
+        .map_err(|_| {
+            ApiError::new(
+                StatusCode::TOO_MANY_REQUESTS,
+                "filter_busy",
+                "too many filtered queries are running; try again shortly",
+            )
+        })
 }
 
 /// Maps a capture error for an upload. The temporary file's random name is
@@ -481,13 +614,16 @@ pub async fn list_packets(
     let _slot = state.read_slot().await?;
     let page = page_of(params.page, params.per_page)?;
     let sort = packet_sort(params.sort.as_deref())?;
+    let conditions = Conditions {
+        flow_id: params.flow_id,
+        filter: compile_filter(params.filter.as_deref(), Target::Packets)?,
+    };
     require_session(&state, id).await?;
-    let flow = params.flow_id.map(FlowIs);
-    let condition = flow.as_ref().map(|c| c as &dyn SqlCondition);
+    let _permit = filter_permit(&state, conditions.filter.as_ref())?;
     Ok(Json(
         state
             .storage
-            .list_packets(id, page, sort, condition)
+            .list_packets(id, page, sort, conditions.as_condition())
             .await?,
     ))
 }
@@ -541,8 +677,18 @@ pub async fn list_flows(
     let _slot = state.read_slot().await?;
     let page = page_of(params.page, params.per_page)?;
     let sort = flow_sort(params.sort.as_deref())?;
+    let conditions = Conditions {
+        flow_id: None,
+        filter: compile_filter(params.filter.as_deref(), Target::Flows)?,
+    };
     require_session(&state, id).await?;
-    Ok(Json(state.storage.list_flows(id, page, sort, None).await?))
+    let _permit = filter_permit(&state, conditions.filter.as_ref())?;
+    Ok(Json(
+        state
+            .storage
+            .list_flows(id, page, sort, conditions.as_condition())
+            .await?,
+    ))
 }
 
 /// Get one flow with its full statistics.
@@ -643,6 +789,70 @@ pub async fn list_tls(
     let page = page_of(params.page, params.per_page)?;
     require_session(&state, id).await?;
     Ok(Json(state.storage.list_tls_events(id, page).await?))
+}
+
+/// Check a display filter without running it.
+#[utoipa::path(
+    get,
+    path = "/api/v1/filters/validate",
+    tag = "filters",
+    params(FilterParams),
+    responses(
+        (status = 200, description = "The filter is valid", body = FilterCheck),
+        (status = 400, description = "Invalid filter, with the position of the problem", body = ErrorResponse),
+    )
+)]
+pub async fn validate_filter(
+    ApiQuery(params): ApiQuery<FilterParams>,
+) -> Result<Json<FilterCheck>, ApiError> {
+    let target = target_of(&params.target)?;
+    let filter = compile(&params.filter, target).map_err(|err| ApiError::filter(&err))?;
+    Ok(Json(FilterCheck {
+        valid: true,
+        target: if target == Target::Packets {
+            "packets"
+        } else {
+            "flows"
+        },
+        parameters: filter.param_count(),
+        normalized: filter.normalized,
+    }))
+}
+
+/// List the fields a filter may use.
+#[utoipa::path(
+    get,
+    path = "/api/v1/filters/fields",
+    tag = "filters",
+    params(TargetParams),
+    responses(
+        (status = 200, description = "Filterable fields", body = Vec<FilterField>),
+        (status = 400, description = "Invalid target", body = ErrorResponse),
+    )
+)]
+pub async fn filter_fields(
+    ApiQuery(params): ApiQuery<TargetParams>,
+) -> Result<Json<Vec<FilterField>>, ApiError> {
+    let target = target_of(&params.target)?;
+    let fields = filter_language::fields(target)
+        .iter()
+        .map(|field| {
+            let (values, max) = match field.field_type {
+                FieldType::Enum(values) => (Some(values.to_vec()), None),
+                FieldType::UInt { max } => (None, Some(max)),
+                _ => (None, None),
+            };
+            FilterField {
+                name: field.name,
+                field_type: field.field_type.name(),
+                description: field.description,
+                operators: filter_language::operators(field.field_type).to_vec(),
+                values,
+                max,
+            }
+        })
+        .collect();
+    Ok(Json(fields))
 }
 
 /// Get retention settings.

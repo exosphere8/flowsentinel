@@ -6,6 +6,7 @@ members = [
     "crates/capture",
     "crates/cli",
     "crates/decoder",
+    "crates/filter-language",
     "crates/flow-engine",
     "crates/storage",
 ]
@@ -26,6 +27,7 @@ publish = false
 analysis = { path = "crates/analysis" }
 capture = { path = "crates/capture" }
 decoder = { path = "crates/decoder" }
+filter-language = { path = "crates/filter-language" }
 flow-engine = { path = "crates/flow-engine" }
 storage = { path = "crates/storage" }
 

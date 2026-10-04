@@ -15,12 +15,12 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 5)
+## Current components (Milestone 6)
 
 ```
   curl / client --HTTP--> +--------------------+  /health, /api/v1/... (JSON, OpenAPI)
                           | api-server (Axum)  |-- stream upload --> private temp file (.pcap)
-                          +----+-----------+---+
+                          +----+-----------+---+-- ?filter= --> filter-language --> SQL pieces + parameters
                                |           |  SQL (parameterized, one transaction per import)
             spawn_blocking     |      +----v-----+
                                |      | storage  |--> PostgreSQL 16 (sessions, packets, flows,
@@ -89,6 +89,21 @@ PostgreSQL persistence with SQLx. See [docs/data-retention.md](docs/data-retenti
   async runtime; `add_packets` moves the rows into the insert, so metadata is never copied.
 - Feature `test-support` provides `testing::TestDatabase`, a migrated database created per test
   and dropped afterwards, even if the test panics.
+
+### `crates/filter-language`
+
+The display-filter language (see [docs/filter-language.md](docs/filter-language.md)). It has no
+database dependency.
+
+- `lexer.rs` turns text into tokens with byte spans (length and token limits). `parser.rs` builds
+  an `Expr` tree by recursive descent (depth and clause limits). `fields.rs` is the fixed catalog
+  of packet and flow fields: type, SQL column or predicate, and optional guard.
+- `translate.rs` type-checks each comparison against the catalog and emits `Piece`s: `Sql` holds
+  a `'static` fragment from the catalog or the translator, and `Param` holds a typed value. User
+  text can only ever become a `Param`.
+- The API's `Conditions` (`routes.rs`) implements `storage::SqlCondition` by pushing `Sql` pieces
+  and binding `Param` pieces with SQLx, so filters reuse the storage layer's parameterized list
+  queries.
 
 ### `crates/capture`
 
@@ -199,7 +214,6 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `filter-language` | 6 | Display-filter lexer, parser, validator and parameterized SQL translation |
 | `detection-engine` | 7 | Configurable, explainable heuristics over flows and metadata |
 | `frontend/` | 8 | React + TypeScript dashboard |
 
