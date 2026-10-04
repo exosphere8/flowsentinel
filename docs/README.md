@@ -11,6 +11,7 @@
 | [application-metadata.md](application-metadata.md) | DNS, DHCP, HTTP and TLS handshake metadata: recognition, fields, limits, redaction |
 | [flow-engine.md](flow-engine.md) | `flowsentinel flows`: flow keys, direction, statistics, TCP state, expiry, memory limits |
 | [api.md](api.md) | REST API: running, importing, endpoints, pagination, sorting, errors |
+| [filter-language.md](filter-language.md) | Display filters: syntax, fields, semantics, limits, errors, how they become SQL |
 | [data-retention.md](data-retention.md) | What is stored, what never is, retention settings and deletion |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 

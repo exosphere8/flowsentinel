@@ -30,8 +30,10 @@ Tests that need PostgreSQL create a disposable database per test (see
 
 | Location | What it covers |
 | --- | --- |
+| `crates/filter-language/src/*.rs` | Lexer, parser precedence and limits, translation, type errors with positions, injection attempts, catalog documented |
+| `crates/filter-language/tests/properties.rs` | Property tests: arbitrary text never panics; generated filters compile and round-trip; quoted text is always one parameter |
 | `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, no secrets stored |
-| `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, OpenAPI, no secrets in any response |
+| `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, OpenAPI, no secrets in any response |
 
 This directory is reserved for end-to-end tests that span several processes, such as the
 dashboard against a running API (Milestone 8).

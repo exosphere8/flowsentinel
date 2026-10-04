@@ -31,7 +31,8 @@ cancelled and their upload files deleted.
 | `FLOWSENTINEL_DATABASE_URL` | (required) | `postgres://USER:PASSWORD@HOST:PORT/DATABASE`; never logged |
 | `FLOWSENTINEL_MAX_UPLOAD_MB` | 512 | Largest accepted upload (1–65536) |
 | `FLOWSENTINEL_MAX_CONCURRENT_IMPORTS` | 2 | Imports processed at once (1–16); more get `429` |
-| `FLOWSENTINEL_DB_MAX_CONNECTIONS` | 10 | Connection pool size (1–100) |
+| `FLOWSENTINEL_DB_MAX_CONNECTIONS` | 10 | Connection pool size (1–100); see [Security notes](#security-notes) for how it is shared |
+| `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS` | 10 | Time limit for one filtered packet or flow list (1–300); slower queries get `503 query_timeout` |
 | `FLOWSENTINEL_UPLOAD_DIR` | system temp dir | Where uploads are written while they are analyzed. Give each server its own directory: leftover `flowsentinel-upload-*.pcap` files in it are deleted at startup |
 | `FLOWSENTINEL_MAX_PACKETS` | 1000000 | Packets analyzed per import (1–1000000); more are left out and the import is partial |
 | `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time for an import's first pass (1–3600) |
@@ -101,13 +102,15 @@ All paths are under `/api/v1`. IDs are integers.
 | `GET /captures` | Captures, newest first |
 | `GET /captures/{id}` | One capture with its capture warnings, decode summary and flow summary |
 | `DELETE /captures/{id}` | Deletes the capture and everything stored for it (`204`) |
-| `GET /captures/{id}/packets` | Packet summaries: index, time, lengths, decode status, top protocol, endpoints, ports, flow ID, info line |
+| `GET /captures/{id}/packets` | Packet summaries: index, time, lengths, decode status, top protocol, endpoints, ports, flow ID, info line. Takes `filter` and `flow_id` |
 | `GET /captures/{id}/packets/{index}` | One packet with its decoded protocol tree and decode warnings |
-| `GET /captures/{id}/flows` | Flow summaries |
+| `GET /captures/{id}/flows` | Flow summaries. Takes `filter` |
 | `GET /captures/{id}/flows/{flow_id}` | One flow with its full record (statistics, TCP state, application metadata) |
 | `GET /captures/{id}/dns` | DNS messages: transaction, query name and type, response code, answers |
 | `GET /captures/{id}/http` | HTTP request and response metadata, already redacted by the decoder |
 | `GET /captures/{id}/tls` | Visible TLS handshake metadata (SNI, ALPN, version, cipher-suite count) |
+| `GET /filters/validate?target=packets\|flows&filter=...` | Checks a display filter; returns its normalized form |
+| `GET /filters/fields?target=packets\|flows` | Filterable fields with types, operators and allowed values |
 | `GET /settings/retention`, `PUT /settings/retention` | Retention settings (see [data-retention.md](data-retention.md)) |
 | `GET /openapi.json` | OpenAPI description |
 | `GET /health` (no prefix) | Liveness: `{"status":"ok","service":"flowsentinel-api"}` |
@@ -133,8 +136,10 @@ return:
 | `/captures/{id}/packets` | `index` (default), `-index`, `time`, `-length` |
 | `/captures/{id}/flows` | `start` (default), `-bytes`, `-packets`, `-duration` |
 
-`/captures/{id}/packets` also takes `flow_id` to list one flow's packets. Unknown query
-parameters are rejected with `invalid_query`.
+`/captures/{id}/packets` also takes `flow_id` to list one flow's packets. Both packet and flow
+lists take `filter`, a display filter such as `tcp.port == 443 and not ip.addr == 10.0.0.0/8`;
+see [filter-language.md](filter-language.md). Unknown query parameters are rejected with
+`invalid_query`.
 
 ### Times
 
@@ -152,25 +157,25 @@ Every error is JSON with a stable `code`:
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_query`, `invalid_path`, `invalid_page`, `invalid_per_page`, `invalid_sort`, `unsupported_extension`, `empty_upload`, `upload_interrupted`, `invalid_ttl`, `invalid_max_packets`, `invalid_body` (malformed JSON) |
+| 400 | `invalid_query`, `invalid_path`, `invalid_page`, `invalid_per_page`, `invalid_sort`, `invalid_target`, `unsupported_extension`, `empty_upload`, `upload_interrupted`, `invalid_ttl`, `invalid_max_packets`, `invalid_body` (malformed JSON); filter errors (`unknown_field`, `syntax_error`, `invalid_value`, ... with a `position`; see [filter-language.md](filter-language.md#limits-and-errors)) |
 | 404 | `not_found` (unknown capture, packet, flow or endpoint) |
 | 405 | `method_not_allowed` |
 | 408 | `upload_timeout` |
 | 413 | `upload_too_large`; `invalid_body` for a JSON body over 16 KiB |
 | 415 | `unsupported_media_type`; `invalid_body` for a JSON body without `Content-Type: application/json` |
 | 422 | Capture errors with the same codes as the CLI (`invalid_magic`, `unsupported_format`, `truncated_record_data`, ...); `invalid_body` for well-formed JSON with missing or unknown fields |
-| 429 | `import_busy` |
+| 429 | `import_busy`; `filter_busy` (too many filtered lists running) |
 | 500 | `internal_error`; the cause is logged, never returned |
 | 421 | `invalid_host`: the `Host` header is not one the server answers |
-| 503 | `database_unavailable`; `server_busy` (no database slot within 10 seconds) |
+| 503 | `database_unavailable`; `server_busy` (no database slot within 10 seconds); `query_timeout` (a filtered list took longer than its limit) |
 
 Messages never contain SQL, file paths, stack traces or packet data. Client-supplied text echoed
 in a message is cut at 200 characters.
 
 ## Security notes
 
-- Every query is parameterized. Sort orders map to fixed SQL fragments. Filters (Milestone 6)
-  bind every value as a parameter.
+- Every query is parameterized. Sort orders map to fixed SQL fragments. Display filters are
+  translated into fixed SQL fragments plus bound parameters; filter text never becomes SQL.
 - No table has a column for payload bytes; see [data-retention.md](data-retention.md) for what is
   stored.
 - JSON request bodies are limited to 16 KiB; uploads to `FLOWSENTINEL_MAX_UPLOAD_MB`.
@@ -181,7 +186,9 @@ in a message is cut at 200 characters.
   `packet_limit_reached` or `time_limit_reached`.
 - Reads and settings changes share the database pool minus two connections per import slot
   (at least one), so heavy reading cannot starve imports. A request that waits more than 10
-  seconds for a slot gets `503 server_busy`.
+  seconds for a slot gets `503 server_busy`. Filtered packet and flow lists may use at most half
+  of these slots at once (more get `429 filter_busy`) and run under
+  `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS`.
 
 ### Host names
 

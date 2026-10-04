@@ -43,6 +43,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "filter-language"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -63,6 +71,7 @@ version = "0.0.0"
 dependencies = [
  "capture",
  "decoder",
+ "filter-language",
  "flow-engine",
  "libfuzzer-sys",
  "serde_json",

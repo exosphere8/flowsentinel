@@ -35,7 +35,7 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 5)
+## Current security posture (Milestone 6)
 
 - The API binds to `127.0.0.1` by default and has **no authentication yet**. Anyone who can reach
   it can import, read and delete captures and change retention. Do not expose it to a network.
@@ -62,6 +62,12 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 - Every SQL statement is parameterized. Sort orders are fixed fragments chosen by enums, and
   query parameters are validated (unknown parameters are rejected). Errors are structured JSON
   without SQL, file paths or stack traces. JSON request bodies are limited to 16 KiB.
+- Display filters are tokenized, parsed and type-checked against a fixed field catalog with
+  length, token, nesting and clause limits. They are translated into fixed SQL fragments and
+  bound parameters only, so filter text cannot change a query's structure. Property tests and a
+  fuzz target check this. Filtered lists run under a statement timeout (default 10 s) and at most
+  half of the read slots serve them at once, so an expensive filter cannot take the
+  database away from other requests or imports. See [docs/filter-language.md](docs/filter-language.md).
 - The database URL, which contains a password, is never logged or returned. `Config`'s `Debug`
   output redacts it. Retention (default 30 days, hourly purge) bounds how long imported metadata
   is kept; see [docs/data-retention.md](docs/data-retention.md).

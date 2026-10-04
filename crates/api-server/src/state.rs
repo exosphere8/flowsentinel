@@ -42,6 +42,9 @@ pub struct AppState {
     /// two connections per import slot in reserve, so heavy reading cannot
     /// starve imports.
     pub read_slots: Arc<Semaphore>,
+    /// One permit per concurrent filtered list query: at most half the read
+    /// slots, so expensive filters cannot starve other reads.
+    pub filter_slots: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -54,6 +57,7 @@ impl AppState {
             config: Arc::new(config),
             import_slots: Arc::new(Semaphore::new(imports)),
             read_slots: Arc::new(Semaphore::new(reads)),
+            filter_slots: Arc::new(Semaphore::new((reads / 2).max(1))),
         }
     }
 

@@ -283,6 +283,49 @@ async fn conditions_filter_with_bound_parameters() {
     db.drop_database().await;
 }
 
+/// A condition that takes about a second per row.
+struct Slow;
+
+impl SqlCondition for Slow {
+    fn push(&self, builder: &mut QueryBuilder<'_, Postgres>) {
+        builder.push("(SELECT true FROM pg_sleep(1))");
+    }
+}
+
+#[tokio::test]
+async fn slow_list_queries_are_cancelled_at_the_time_limit() {
+    let Some(db) = TestDatabase::create("query_timeout").await else {
+        return;
+    };
+    let id = import(&db.storage, "flows-mixed.pcap", 100_000)
+        .await
+        .session
+        .id;
+    let limited = db
+        .storage
+        .clone()
+        .with_query_timeout(std::time::Duration::from_millis(200));
+    let started = std::time::Instant::now();
+    let err = limited
+        .list_packets(id, Page::new(1, 50), PacketSort::Index, Some(&Slow))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, storage::StorageError::QueryTimeout), "{err}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    let err = limited
+        .list_flows(id, Page::new(1, 50), FlowSort::Start, Some(&Slow))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, storage::StorageError::QueryTimeout), "{err}");
+    // The connection is usable afterwards, and quick queries still work.
+    let all = limited
+        .list_packets(id, Page::new(1, 50), PacketSort::Index, None)
+        .await
+        .unwrap();
+    assert_eq!(all.total, 19);
+    db.drop_database().await;
+}
+
 #[tokio::test]
 async fn retention_settings_and_purge() {
     let Some(db) = TestDatabase::create("retention").await else {

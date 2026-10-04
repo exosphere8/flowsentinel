@@ -33,6 +33,9 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   as metadata only (captures, packets, flows, DNS/HTTP/TLS events) and serves them with
   pagination, validated sorting, structured errors, retention controls and an OpenAPI
   description.
+- **Milestone 6, display filters:** packet and flow lists accept Wireshark-like filters such as
+  `ip.addr == 192.0.2.0/24 and tls.sni contains "example"`. Filters are type-checked against a
+  field catalog, report errors with positions, and are translated into parameterized SQL.
 
 ## Quick start
 
@@ -60,6 +63,7 @@ curl -X POST -H 'Content-Type: application/vnd.tcpdump.pcap' \
   --data-binary @fixtures/pcap/flows-mixed.pcap \
   'http://127.0.0.1:8080/api/v1/captures?file_name=flows-mixed.pcap'
 curl 'http://127.0.0.1:8080/api/v1/captures/1/flows?sort=-bytes'
+curl -G 'http://127.0.0.1:8080/api/v1/captures/1/packets' --data-urlencode 'filter=tcp.port == 443'
 
 cargo run -p cli -- --version
 # flowsentinel 0.1.0
@@ -157,6 +161,7 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_MAX_PACKETS` | 1000000 | Packets analyzed per import |
 | `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time per import's first pass |
 | `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | `Host` names the API answers (comma-separated, or `*`) |
+| `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS` | 10 | Time limit for one filtered list query |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -187,6 +192,7 @@ crates/
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
   decoder/      Bounds-checked protocol and application-metadata decoder
+  filter-language/  Display-filter lexer, parser, type checker and SQL translation
   flow-engine/  Bidirectional flow reconstruction with bounded memory
   storage/      PostgreSQL persistence (SQLx, embedded migrations, retention)
 docs/           Design and user documentation
@@ -206,7 +212,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Done |
 | 4 | Bidirectional flow reconstruction | Done |
 | 5 | PostgreSQL persistence and REST API | Done |
-| 6 | Display-filter language | Planned |
+| 6 | Display-filter language | Done |
 | 7 | Explainable rule-based detection | Planned |
 | 8 | React dashboard | Planned |
 | 9 | Authentication, RBAC and auditing | Planned |

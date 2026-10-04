@@ -26,12 +26,17 @@ use crate::routes;
         routes::list_dns,
         routes::list_http,
         routes::list_tls,
+        routes::validate_filter,
+        routes::filter_fields,
         routes::get_retention,
         routes::put_retention,
     ),
     components(schemas(
         ErrorBody,
         ErrorResponse,
+        crate::error::Position,
+        routes::FilterCheck,
+        routes::FilterField,
         storage::Session,
         storage::SessionDetail,
         storage::PacketSummary,
@@ -48,6 +53,7 @@ use crate::routes;
         (name = "packets", description = "Per-packet metadata"),
         (name = "flows", description = "Bidirectional flows"),
         (name = "application", description = "DNS, HTTP and TLS handshake metadata"),
+        (name = "filters", description = "Display-filter validation and field catalog"),
         (name = "settings", description = "Retention settings"),
     )
 )]
