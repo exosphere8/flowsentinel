@@ -4,7 +4,7 @@ Unit and integration tests live next to the code they cover:
 
 | Location | What it covers |
 | --- | --- |
-| `crates/api-server/tests/health.rs` | `GET /health` in-process and over a real TCP socket |
+| `crates/api-server/tests/health.rs` | `GET /health` in-process and over a real TCP socket; the `healthcheck` probe |
 | `crates/capture/src/*.rs` | PCAP header, record, timestamp, limit and path validation units |
 | `crates/capture/tests/fixtures.rs` | Every committed fixture in `fixtures/pcap/` |
 | `crates/capture/tests/properties.rs` | Property tests: arbitrary bytes never panic; valid captures round-trip |
@@ -38,5 +38,13 @@ Tests that need PostgreSQL create a disposable database per test (see
 | `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, alerts with flow links and triage, no secrets stored |
 | `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, alerts and triage, OpenAPI, no secrets in any response |
 
-This directory is reserved for end-to-end tests that span several processes, such as the
-dashboard against a running API (Milestone 8).
+The dashboard's tests live in `frontend/` (see [docs/dashboard.md](../docs/dashboard.md#tests)):
+
+| Location | What it covers |
+| --- | --- |
+| `frontend/src/api/client.test.ts` | The typed API client: query building, structured errors, uploads and JSON requests |
+| `frontend/src/lib/format.test.ts` | Number, byte, time and filter-position formatting |
+| `frontend/src/components/components.test.tsx` | Charts and their tables, paging, the filter bar's validation, the protocol tree's payload guard |
+| `frontend/src/pages/pages.test.tsx` | Every page against a mocked API: loading, error and empty states, filters, triage, deletion, axe-core accessibility checks |
+| `frontend/e2e/smoke.spec.ts` | Playwright: the built dashboard served by `api-server` with a real database; imports a fixture through the UI, walks every page, checks for console errors, CSP violations, payload markers and security headers |
+| `crates/api-server/tests/openapi.rs` | `docs/openapi.json`, from which the dashboard's API types are generated, matches the server |

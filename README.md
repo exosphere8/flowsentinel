@@ -41,10 +41,15 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   transfers, cleartext logins, DNS volume and tunneling, ARP conflicts and floods). Each alert is
   a heuristic indicator with its evidence, cited flows or packets, uncertainty and likely false
   positives, never a verdict. Analysts triage alerts through the API.
+- **Milestone 8, dashboard:** a React and TypeScript web dashboard served by the API server shows
+  an overview, captures, packets with their protocol trees, flows, alerts with their evidence
+  and triage, and settings. Tables are paged, sorted and filtered on the server, display filters
+  are validated as they are typed, and no packet payload is ever rendered.
 
 ## Quick start
 
-Requirements: Rust 1.85+ (stable), Docker with Compose v2, and optionally `make`.
+Requirements: Rust 1.85+ (stable), Docker with Compose v2, Node.js 22.22+ for the dashboard, and
+optionally `make`.
 
 ```bash
 git clone https://github.com/exosphere8/flowsentinel.git
@@ -57,6 +62,26 @@ make dev                        # loads .env, migrates the database, serves http
 ```
 
 Without `make`, export the variables from `.env` yourself and run `cargo run -p api-server`.
+
+### Dashboard
+
+Build the dashboard and let the API server serve it on the same address:
+
+```bash
+make dashboard                                    # npm ci and npm run build in frontend/
+FLOWSENTINEL_DASHBOARD_DIR=frontend/dist make dev  # http://127.0.0.1:8080
+```
+
+Or run everything in containers, with the server and dashboard built into one image that runs as
+an unprivileged user:
+
+```bash
+docker compose --profile app up -d --build --wait   # http://127.0.0.1:8080
+```
+
+Import a capture on the **Captures** page, for example `fixtures/pcap/detect-mixed.pcap`. See
+[docs/dashboard.md](docs/dashboard.md) for the pages, the development server, security headers
+and tests.
 
 In another terminal:
 
@@ -189,6 +214,8 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | `Host` names the API answers (comma-separated, or `*`) |
 | `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS` | 10 | Time limit for one filtered list query |
 | `FLOWSENTINEL_DETECTION_CONFIG` | built-in thresholds | Detection thresholds (TOML; see `config/detection.example.toml`) |
+| `FLOWSENTINEL_DASHBOARD_DIR` | not set | Built dashboard to serve at `/` (`frontend/dist`) |
+| `FLOWSENTINEL_PORT` | 8080 | Port the Compose `app` container is published on (127.0.0.1 only) |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -207,6 +234,9 @@ authentication until Milestone 9.
 | `make test-db` | Run the storage and API tests against the Compose PostgreSQL |
 | `make check` | Full CI gate: format check, lint, test, build |
 | `make fixtures` | Regenerate the synthetic PCAP fixtures |
+| `make dashboard` | Install the dashboard's dependencies and build it into `frontend/dist` |
+| `make frontend-check` | Dashboard API-type check, lint, type check and unit tests |
+| `make e2e` | Dashboard end-to-end smoke tests (needs a running server; see docs/dashboard.md) |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
@@ -226,6 +256,7 @@ crates/
 config/         Example configuration (detection thresholds)
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
+frontend/       React + TypeScript dashboard (Vite, Vitest, Playwright)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
 scripts/        Developer scripts, including the fixture generator
 tests/          Notes on where the cross-crate and cross-service tests live
@@ -243,7 +274,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 5 | PostgreSQL persistence and REST API | Done |
 | 6 | Display-filter language | Done |
 | 7 | Explainable rule-based detection | Done |
-| 8 | React dashboard | Planned |
+| 8 | React dashboard | Done |
 | 9 | Authentication, RBAC and auditing | Planned |
 | 10 | Authorized live capture | Planned |
 | 11 | Observability, performance and hardening | Planned |

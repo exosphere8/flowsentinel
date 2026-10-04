@@ -3,10 +3,12 @@
 //! The router, handlers and configuration live in the library so tests can
 //! drive them in-process without binding a real port. [`app`] serves only
 //! `GET /health`; [`app_with_state`] adds the `/api/v1` endpoints backed by
-//! PostgreSQL.
+//! PostgreSQL and, when configured, the built dashboard.
 
+pub mod dashboard;
 pub mod error;
 pub mod extract;
+pub mod healthcheck;
 pub mod host;
 pub mod openapi;
 pub mod routes;
@@ -49,6 +51,8 @@ pub const MAX_ANALYSIS_SECONDS_ENV_VAR: &str = "FLOWSENTINEL_MAX_ANALYSIS_SECOND
 pub const QUERY_TIMEOUT_ENV_VAR: &str = "FLOWSENTINEL_QUERY_TIMEOUT_SECONDS";
 /// Optional TOML file with detection thresholds.
 pub const DETECTION_CONFIG_ENV_VAR: &str = "FLOWSENTINEL_DETECTION_CONFIG";
+/// Optional directory with the built dashboard (`frontend/dist`).
+pub const DASHBOARD_DIR_ENV_VAR: &str = "FLOWSENTINEL_DASHBOARD_DIR";
 
 /// Default listen address: loopback only, so a fresh install is not reachable
 /// from the network.
@@ -82,17 +86,23 @@ pub async fn health() -> Json<HealthResponse> {
 
 /// Builds the health-only router (no `Host` check: it reveals nothing).
 pub fn app() -> Router {
-    Router::new()
-        .route("/health", get(health))
-        .fallback(error::not_found)
-        .method_not_allowed_fallback(error::method_not_allowed)
+    dashboard::with_security_headers(
+        Router::new()
+            .route("/health", get(health))
+            .fallback(error::not_found)
+            .method_not_allowed_fallback(error::method_not_allowed),
+    )
 }
 
-/// Builds the full router: `/health`, `/api/v1/...` and the OpenAPI
-/// description. Requests for unexpected `Host` names are refused.
+/// Builds the full router: `/health`, `/api/v1/...` with the OpenAPI
+/// description, and the dashboard at `/` when `dashboard_dir` is set.
+/// Unknown `/api/v1` paths always get a JSON error, never the dashboard.
+/// Requests for unexpected `Host` names are refused.
 pub fn app_with_state(state: AppState) -> Router {
     let policy = Arc::new(state.config.host_policy.clone());
+    let dashboard_dir = state.config.dashboard_dir.clone();
     let api = Router::new()
+        .route("/overview", get(routes::overview))
         .route(
             "/captures",
             get(routes::list_captures).post(routes::import_capture),
@@ -121,16 +131,24 @@ pub fn app_with_state(state: AppState) -> Router {
         .route("/filters/validate", get(routes::validate_filter))
         .route("/filters/fields", get(routes::filter_fields))
         .route("/openapi.json", get(openapi_json))
+        .fallback(error::not_found)
+        .method_not_allowed_fallback(error::method_not_allowed)
         // Uploads stream their raw body under their own limit; this caps
         // everything read through the JSON extractor.
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
         .with_state(state);
-    Router::new()
+    let router = Router::new()
         .route("/health", get(health))
-        .nest("/api/v1", api)
-        .fallback(error::not_found)
-        .method_not_allowed_fallback(error::method_not_allowed)
-        .layer(middleware::from_fn_with_state(policy, host::guard))
+        .nest("/api/v1", api);
+    let router = match dashboard_dir {
+        Some(dir) => router.fallback_service(dashboard::service(&dir)),
+        None => router.fallback(error::not_found),
+    };
+    dashboard::with_security_headers(
+        router
+            .method_not_allowed_fallback(error::method_not_allowed)
+            .layer(middleware::from_fn_with_state(policy, host::guard)),
+    )
 }
 
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
@@ -156,6 +174,8 @@ pub struct Config {
     pub query_timeout_seconds: u64,
     /// Detection thresholds file (default: built-in thresholds).
     pub detection_config: Option<PathBuf>,
+    /// Built dashboard to serve at `/` (default: none).
+    pub dashboard_dir: Option<PathBuf>,
 }
 
 impl fmt::Debug for Config {
@@ -175,6 +195,7 @@ impl fmt::Debug for Config {
             .field("max_analysis_seconds", &self.max_analysis_seconds)
             .field("query_timeout_seconds", &self.query_timeout_seconds)
             .field("detection_config", &self.detection_config)
+            .field("dashboard_dir", &self.dashboard_dir)
             .finish()
     }
 }
@@ -218,6 +239,7 @@ impl Default for Config {
             max_analysis_seconds: DEFAULT_MAX_ANALYSIS_SECONDS,
             query_timeout_seconds: DEFAULT_QUERY_TIMEOUT_SECONDS,
             detection_config: None,
+            dashboard_dir: None,
         }
     }
 }
@@ -329,6 +351,7 @@ impl Config {
         };
         let upload_dir = path(UPLOAD_DIR_ENV_VAR);
         let detection_config = path(DETECTION_CONFIG_ENV_VAR);
+        let dashboard_dir = path(DASHBOARD_DIR_ENV_VAR);
         Ok(Self {
             addr,
             database_url,
@@ -341,6 +364,7 @@ impl Config {
             max_analysis_seconds,
             query_timeout_seconds,
             detection_config,
+            dashboard_dir,
         })
     }
 }
@@ -425,6 +449,7 @@ mod tests {
                 DETECTION_CONFIG_ENV_VAR,
                 " /etc/flowsentinel/detection.toml ",
             ),
+            (DASHBOARD_DIR_ENV_VAR, "frontend/dist"),
         ]))
         .unwrap();
         assert_eq!(ok.max_upload_bytes, 64 * 1024 * 1024);
@@ -435,6 +460,7 @@ mod tests {
             ok.detection_config,
             Some(PathBuf::from("/etc/flowsentinel/detection.toml"))
         );
+        assert_eq!(ok.dashboard_dir, Some(PathBuf::from("frontend/dist")));
     }
 
     #[test]

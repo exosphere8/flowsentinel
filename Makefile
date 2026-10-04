@@ -1,9 +1,10 @@
-.PHONY: help up down dev test test-db lint fmt check fixtures
+.PHONY: help up down dev test test-db lint fmt check fixtures dashboard frontend-check e2e
 
 CARGO ?= cargo
+NPM ?= npm
 
 help: ## List targets
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-8s %s\n", $$1, $$2}'
+	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
 up: ## Start PostgreSQL and Redis and wait until healthy
 	docker compose up -d --wait
@@ -32,6 +33,15 @@ fmt: ## Format all Rust code
 
 fixtures: ## Regenerate the synthetic PCAP fixtures
 	python3 scripts/generate_pcap_fixtures.py
+
+dashboard: ## Install the dashboard's dependencies and build it into frontend/dist
+	cd frontend && $(NPM) ci && $(NPM) run build
+
+frontend-check: ## Dashboard API-type check, lint, type check and unit tests
+	cd frontend && $(NPM) run check:api && $(NPM) run lint && $(NPM) run typecheck && $(NPM) test
+
+e2e: ## Dashboard end-to-end smoke tests against a running server (see docs/dashboard.md)
+	cd frontend && $(NPM) run e2e
 
 check: ## Run the full CI gate: format check, lint, test, build
 	$(CARGO) fmt --all --check

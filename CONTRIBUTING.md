@@ -14,9 +14,10 @@ Contributions are welcome. FlowSentinel is security software, so the bar for saf
 1. Install stable Rust (1.85 or newer) with `rustfmt` and `clippy`:
    `rustup component add rustfmt clippy`
 2. Install Docker with Compose v2 (needed only for `make up`).
-3. Copy the environment template and set real local passwords:
+3. For the dashboard, install Node.js 22.22 or newer with npm.
+4. Copy the environment template and set real local passwords:
    `cp .env.example .env`
-4. Verify everything: `make check`
+5. Verify everything: `make check`, and `make dashboard frontend-check` for the dashboard.
 
 On Windows without `make`, run the commands from the `check` target in the Makefile directly.
 If a build fails with `os error 3`, see the Windows note in the README.
@@ -57,6 +58,25 @@ cargo build --workspace
 make test-db   # storage and API tests against PostgreSQL (CI runs these too)
 ```
 
+For dashboard changes, also run in `frontend/`:
+
+```bash
+npm run check:api   # src/api/schema.ts matches docs/openapi.json
+npm run lint
+npm run typecheck
+npm test
+npm run build
+npm run e2e         # against a running server; see docs/dashboard.md
+```
+
+When an API change alters the OpenAPI document, regenerate the snapshot and the dashboard's
+types, and commit both:
+
+```bash
+FLOWSENTINEL_UPDATE_OPENAPI=1 cargo test -p api-server --test openapi
+cd frontend && npm run gen:api
+```
+
 ## Coding standards
 
 - Idiomatic, `rustfmt`-formatted Rust. `unsafe` is forbidden workspace-wide.
@@ -72,6 +92,9 @@ make test-db   # storage and API tests against PostgreSQL (CI runs these too)
 - Parsers of untrusted input need property tests, and should be added to the cargo-fuzz targets
   in `fuzz/` (see `fuzz/README.md`). Run a fuzz session after changing a parser.
 - Keep documentation in sync: user-visible changes update the README or `docs/`.
+- Dashboard code is strict TypeScript. Render data as text only (never `dangerouslySetInnerHTML`),
+  load nothing from other origins, never render packet contents, and give every control a label.
+  Each page needs tests for its loading, error and empty states and an axe-core check.
 
 ## Branches and commits
 

@@ -1,6 +1,8 @@
 //! Rows returned by [`Storage`](crate::Storage) queries. These are also the
 //! API's response bodies, so every field is metadata only.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use utoipa::ToSchema;
 
@@ -252,4 +254,22 @@ mod tests {
         assert_eq!(rfc3339_from_nanos(-1), None);
         assert_eq!(rfc3339_from_nanos(i64::MAX), None);
     }
+}
+
+/// Totals across every stored capture, for the dashboard's overview.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct Overview {
+    pub captures: i64,
+    pub packets_processed: i64,
+    pub flows_total: i64,
+    /// Alerts are heuristic indicators, not proof of compromise.
+    pub alerts_total: i64,
+    /// Alerts by severity (`low`, `medium`, `high`), any status.
+    pub alerts_by_severity: BTreeMap<String, i64>,
+    /// Alerts by triage status.
+    pub alerts_by_status: BTreeMap<String, i64>,
+    /// Open alerts by severity.
+    pub open_alerts_by_severity: BTreeMap<String, i64>,
+    /// The five most recent imports, newest first.
+    pub recent_captures: Vec<Session>,
 }

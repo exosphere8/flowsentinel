@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Feature branches are checked before they are merged into main.
+    branches: [main, "feature/**"]
   pull_request:
 
 permissions:
@@ -101,10 +102,108 @@ jobs:
           sed -i "s/=change-me$/=ci-$(openssl rand -hex 12)/" .env
       - name: Validate compose file
         run: docker compose config --quiet
+      - name: Validate compose file with the app profile
+        run: docker compose --profile app config --quiet
       - name: Start services and wait for health checks
         run: docker compose up -d --wait --wait-timeout 120
+      - name: Build and start the API server and dashboard
+        run: docker compose --profile app up -d --build --wait --wait-timeout 600
+      - name: Check the API and the dashboard
+        run: |
+          curl -fsS http://127.0.0.1:8080/health
+          curl -fsS http://127.0.0.1:8080/api/v1/overview
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          curl -fsSI http://127.0.0.1:8080/ | grep -qi "content-security-policy"
+          # The container runs as an unprivileged user.
+          test "$(docker compose exec -T app id -u)" = "10001"
       - name: Show service status
-        run: docker compose ps
+        if: always()
+        run: docker compose --profile app ps && docker compose --profile app logs app --tail 50
       - name: Tear down
         if: always()
-        run: docker compose down -v
+        run: docker compose --profile app down -v
+
+  frontend:
+    name: Dashboard (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: npm ci --no-audit --no-fund
+      - name: API types match docs/openapi.json
+        run: npm run check:api
+      - name: Lint
+        run: npm run lint
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  e2e:
+    name: Dashboard end to end
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build the API server
+        run: cargo build --locked -p api-server
+      - name: Build the dashboard
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Install Chromium for Playwright
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Start the API server with the dashboard
+        run: |
+          mkdir -p "$RUNNER_TEMP/uploads"
+          FLOWSENTINEL_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres \
+          FLOWSENTINEL_API_ADDR=127.0.0.1:18080 \
+          FLOWSENTINEL_UPLOAD_DIR="$RUNNER_TEMP/uploads" \
+          FLOWSENTINEL_DASHBOARD_DIR="$PWD/frontend/dist" \
+            nohup target/debug/api-server > "$RUNNER_TEMP/api-server.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:18080/health && exit 0
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/api-server.log"
+          exit 1
+      - name: Smoke tests
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: http://127.0.0.1:18080
+        run: npm run e2e
+      - name: Server log
+        if: always()
+        run: tail -n 100 "$RUNNER_TEMP/api-server.log"

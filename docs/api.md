@@ -40,7 +40,13 @@ cancelled and their upload files deleted.
 | `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time for an import's first pass (1–3600) |
 | `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` names the server answers, or `*`; see [Host names](#host-names) |
 | `FLOWSENTINEL_DETECTION_CONFIG` | built-in thresholds | TOML file of detection thresholds (see [detection-rules.md](detection-rules.md)) |
+| `FLOWSENTINEL_DASHBOARD_DIR` | not set | Built dashboard to serve at `/` (see [dashboard.md](dashboard.md)); the server refuses to start if it has no `index.html` |
 | `RUST_LOG` | `info` | Log filter; logs are JSON lines on stdout |
+
+`flowsentinel-api healthcheck` (or `cargo run -p api-server -- healthcheck`) requests
+`GET /health` from the server at `FLOWSENTINEL_API_ADDR` (through loopback when it listens on
+`0.0.0.0` or `::`) and exits with status 0 if it answers `200` within 5 seconds, 1 otherwise. The
+container image uses it as its health check.
 
 ## Importing a capture
 
@@ -115,12 +121,14 @@ All paths are under `/api/v1`. IDs are integers.
 | `GET /captures/{id}/alerts` | Alerts raised for the capture. Takes `severity`, `status` and `rule` |
 | `GET /captures/{id}/alerts/{alert_id}` | One alert with its evidence, explanation and cited flows and packets |
 | `PATCH /captures/{id}/alerts/{alert_id}` | Changes an alert's triage status; body `{"status": "acknowledged"}` |
+| `GET /overview` | Totals across all captures: captures, packets, flows, alerts by severity and status, open alerts by severity, and the five most recent imports |
 | `GET /rules` | The detection rule catalog |
 | `GET /filters/validate?target=packets\|flows&filter=...` | Checks a display filter; returns its normalized form |
 | `GET /filters/fields?target=packets\|flows` | Filterable fields with types, operators and allowed values |
 | `GET /settings/retention`, `PUT /settings/retention` | Retention settings (see [data-retention.md](data-retention.md)) |
 | `GET /openapi.json` | OpenAPI description |
 | `GET /health` (no prefix) | Liveness: `{"status":"ok","service":"flowsentinel-api"}` |
+| `GET /` and other paths outside `/api/v1` (no prefix) | The dashboard, when `FLOWSENTINEL_DASHBOARD_DIR` is set; otherwise `404` |
 
 Packets and events exist only for the stored packets of a capture. Flows and summaries always
 cover the whole capture, up to the flow engine's retention limit (`flows_stored` against
@@ -209,6 +217,9 @@ in a message is cut at 200 characters.
 - No table has a column for payload bytes; see [data-retention.md](data-retention.md) for what is
   stored.
 - JSON request bodies are limited to 16 KiB; uploads to `FLOWSENTINEL_MAX_UPLOAD_MB`.
+- Every response, including errors and dashboard files, carries a Content Security Policy,
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+  `Cross-Origin-Opener-Policy: same-origin` (see [dashboard.md](dashboard.md#security)).
 - Concurrent imports are limited, and each import's work is bounded by the capture limits and
   the flow engine's limits: `FLOWSENTINEL_MAX_UPLOAD_MB`, `FLOWSENTINEL_MAX_PACKETS` (1,000,000)
   and `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` (600) for the first pass. A larger capture is imported

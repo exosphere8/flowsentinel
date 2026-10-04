@@ -16,8 +16,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder};
 use storage::{
     AlertFilter, AlertRow, AlertSort, DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent,
-    ImportMeta, PacketDetail, PacketRow, PacketSort, PacketSummary, Page, Paged, RetentionSettings,
-    Session, SessionDetail, SessionSort, SqlCondition, StorageError, TlsEvent,
+    ImportMeta, Overview, PacketDetail, PacketRow, PacketSort, PacketSummary, Page, Paged,
+    RetentionSettings, Session, SessionDetail, SessionSort, SqlCondition, StorageError, TlsEvent,
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -622,6 +622,17 @@ pub async fn import_capture(
         Json(session),
     )
         .into_response())
+}
+
+/// Totals across all captures, alert counts and the newest captures.
+#[utoipa::path(
+    get,
+    path = "/api/v1/overview",
+    tag = "captures",
+    responses((status = 200, description = "Totals", body = Overview))
+)]
+pub async fn overview(State(state): State<AppState>) -> Result<Json<Overview>, ApiError> {
+    Ok(Json(state.storage.overview().await?))
 }
 
 /// List imported captures.

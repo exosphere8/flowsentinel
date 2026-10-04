@@ -15,6 +15,7 @@ use crate::routes;
         license(name = "MIT"),
     ),
     paths(
+        routes::overview,
         routes::import_capture,
         routes::list_captures,
         routes::get_capture,
@@ -44,6 +45,7 @@ use crate::routes;
         routes::AlertUpdate,
         routes::RuleInfo,
         storage::AlertRow,
+        storage::Overview,
         storage::Session,
         storage::SessionDetail,
         storage::PacketSummary,

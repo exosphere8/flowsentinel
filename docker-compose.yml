@@ -1,6 +1,9 @@
-# Local development dependencies. The API server stores capture metadata in
-# PostgreSQL (see FLOWSENTINEL_DATABASE_URL in .env.example); Redis is not used
-# by the code yet.
+# Local services. The API server stores capture metadata in PostgreSQL (see
+# FLOWSENTINEL_DATABASE_URL in .env.example); Redis is not used by the code yet.
+#
+#   docker compose up -d --wait                  PostgreSQL and Redis, for `make dev`
+#   docker compose --profile app up -d --build   ...plus the API server with the
+#                                                dashboard on http://127.0.0.1:8080
 #
 # Ports bind to 127.0.0.1 only. Credentials come from .env (see .env.example);
 # compose refuses to start if a password is unset.
@@ -49,6 +52,34 @@ services:
       retries: 10
       start_period: 5s
 
+  # The API server and dashboard, built from the Dockerfile. Optional: the
+  # `app` profile keeps `docker compose up` to the databases for development.
+  app:
+    profiles: ["app"]
+    build: .
+    image: flowsentinel-api:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      FLOWSENTINEL_DATABASE_URL: postgres://${POSTGRES_USER:-flowsentinel}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-flowsentinel}
+      # Unset: only localhost/127.0.0.1 are answered. Otherwise every host
+      # name clients use, comma-separated (see docs/api.md).
+      FLOWSENTINEL_ALLOWED_HOSTS: ${FLOWSENTINEL_ALLOWED_HOSTS:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "127.0.0.1:${FLOWSENTINEL_PORT:-8080}:8080"
+    volumes:
+      - uploads:/var/lib/flowsentinel/uploads
+    # The server writes only to the upload volume; nothing else needs to be
+    # writable, and it needs no Linux capabilities.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   postgres-data:
   redis-data:
+  uploads:

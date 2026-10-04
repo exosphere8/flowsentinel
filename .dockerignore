@@ -1,0 +1,12 @@
+# Only the sources the image build needs.
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!frontend/
+!docs/openapi.json
+crates/**/target/
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
