@@ -79,6 +79,26 @@ describe('Live capture', () => {
     expect(screen.queryByRole('button', { name: 'Start capture' })).not.toBeInTheDocument();
   });
 
+  it('keeps polling a running capture after a failed poll', async () => {
+    let polls = 0;
+    mockApi([
+      ['GET', /\/live\/interfaces$/, () => ({ body: interfaces })],
+      [
+        'GET',
+        /\/live\/captures\/current$/,
+        () => {
+          polls += 1;
+          if (polls === 2) return { status: 503, body: { error: { code: 'server_busy', message: 'busy' } } };
+          if (polls >= 3) return { body: { ...idle, state: 'finished', interface: 'eth0', capture_id: 4 } };
+          return { body: { ...idle, state: 'capturing', interface: 'eth0' } };
+        },
+      ],
+    ]);
+    renderAt('/live');
+    expect(await screen.findByRole('link', { name: 'capture 4' }, { timeout: 6000 })).toBeInTheDocument();
+    expect(polls).toBeGreaterThanOrEqual(3);
+  }, 10_000);
+
   it('is for admins only', async () => {
     mockApi([['GET', /\/auth\/session$/, () => ({ body: sessionAs('analyst', 'ana') })]]);
     renderAt('/live');

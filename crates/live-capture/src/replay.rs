@@ -24,6 +24,8 @@ pub struct ReplaySource {
     repeats_left: u32,
     pace: Option<Duration>,
     buffer: Vec<u8>,
+    /// Packets read in the current pass; an empty file ends the replay.
+    this_pass: u64,
 }
 
 fn open_reader(path: &Path) -> Result<PcapReader<BufReader<File>>, SourceError> {
@@ -50,6 +52,7 @@ impl ReplaySource {
             repeats_left: repeats,
             pace,
             buffer: Vec::new(),
+            this_pass: 0,
         })
     }
 }
@@ -70,13 +73,15 @@ impl PacketSource for ReplaySource {
                 .next_packet(&mut self.buffer)
                 .map_err(|e| SourceError::Failed(e.to_string()))?;
             let Some(record) = record else {
-                if self.repeats_left == 0 {
+                if self.repeats_left == 0 || self.this_pass == 0 {
                     return Ok(Next::End);
                 }
                 self.repeats_left -= 1;
+                self.this_pass = 0;
                 self.reader = open_reader(&self.path)?;
                 continue;
             };
+            self.this_pass += 1;
             if let Some(pace) = self.pace {
                 std::thread::sleep(pace);
             }

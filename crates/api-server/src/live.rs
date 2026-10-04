@@ -238,6 +238,7 @@ async fn blocking<T: Send + 'static>(
     tag = "live",
     responses(
         (status = 200, description = "Interfaces, filtered by FLOWSENTINEL_LIVE_INTERFACES", body = Vec<Interface>),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
         (status = 403, description = "Needs the admin role", body = ErrorResponse),
         (status = 501, description = "This build has no live capture", body = ErrorResponse),
         (status = 503, description = "Live capture is turned off, or the server lacks capture permission", body = ErrorResponse),
@@ -274,6 +275,7 @@ pub async fn interfaces(
     tag = "live",
     responses(
         (status = 200, description = "Status and counters", body = LiveStatus),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
         (status = 403, description = "Needs the admin role", body = ErrorResponse),
     )
 )]
@@ -294,6 +296,7 @@ pub async fn status(State(state): State<AppState>, _admin: Authorized<Admin>) ->
     responses(
         (status = 202, description = "Capturing", body = LiveStatus),
         (status = 400, description = "Not confirmed as authorized, unknown interface, invalid filter or limit", body = ErrorResponse),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
         (status = 403, description = "Needs the admin role, interface not allowed, or missing CSRF token", body = ErrorResponse),
         (status = 409, description = "A capture is already running", body = ErrorResponse),
         (status = 429, description = "Too many imports in progress", body = ErrorResponse),
@@ -307,7 +310,44 @@ pub async fn start(
     admin: Authorized<Admin>,
     ApiJson(request): ApiJson<LiveStart>,
 ) -> Result<(StatusCode, Json<LiveStatus>), ApiError> {
-    check_enabled(&state)?;
+    let interface: String = request.interface.chars().take(64).collect();
+    match begin(&state, client_ip, admin.user(), request).await {
+        Ok(status) => Ok((StatusCode::ACCEPTED, Json(status))),
+        Err(err) => {
+            // Refused attempts are audited too, for example an interface
+            // outside the allowlist.
+            let outcome = if err.status == StatusCode::FORBIDDEN {
+                AuditOutcome::Denied
+            } else {
+                AuditOutcome::Failure
+            };
+            audit::record(
+                &state,
+                NewAuditEvent {
+                    client_ip,
+                    outcome,
+                    target_type: Some("interface"),
+                    target_id: Some(interface),
+                    details: json!({ "code": err.code }),
+                    ..audit::by(admin.user(), "live.start")
+                },
+            )
+            .await;
+            Err(err)
+        }
+    }
+}
+
+/// Checks a start request and starts the capture. Once the capture runs,
+/// everything else happens in spawned tasks, so a client that disconnects
+/// cannot leave the slot stuck.
+async fn begin(
+    state: &AppState,
+    client_ip: Option<std::net::IpAddr>,
+    user: &CurrentUser,
+    request: LiveStart,
+) -> Result<LiveStatus, ApiError> {
+    check_enabled(state)?;
     if !request.authorized {
         return Err(ApiError::bad_request(
             "authorization_required",
@@ -315,7 +355,7 @@ pub async fn start(
              (\"authorized\": true)",
         ));
     }
-    if !allowed(&state, &request.interface) {
+    if !allowed(state, &request.interface) {
         return Err(ApiError::new(
             StatusCode::FORBIDDEN,
             "interface_not_allowed",
@@ -390,41 +430,42 @@ pub async fn start(
         filter: Some(request.filter.clone()),
         promiscuous: request.promiscuous,
         limits: Some(applied),
-        started_by: Some(admin.user().username.clone()),
+        started_by: Some(user.username.clone()),
         started_at: now_rfc3339(),
         ..LiveStatus::idle()
     };
     current.started = Some(Instant::now());
     current.running = Some(running);
+    // Spawned before anything else is awaited: from here on the capture
+    // finishes and is imported whatever happens to this request.
+    tokio::spawn(finish_when_done(
+        state.clone(),
+        user.clone(),
+        client_ip,
+        file,
+        Arc::new(permit),
+        request.interface.clone(),
+    ));
     drop(current);
     tracing::info!(
         interface = %request.interface,
         promiscuous = request.promiscuous,
         "live capture started"
     );
-    audit::record(
-        &state,
-        NewAuditEvent {
-            client_ip,
-            target_type: Some("interface"),
-            target_id: Some(request.interface.chars().take(64).collect()),
-            details: json!({
-                "filter": request.filter,
-                "promiscuous": request.promiscuous,
-                "limits": applied,
-            }),
-            ..audit::by(admin.user(), "live.start")
-        },
-    )
-    .await;
-    tokio::spawn(finish_when_done(
-        state.clone(),
-        admin.user().clone(),
-        file,
-        Arc::new(permit),
-        request.interface,
-    ));
-    Ok((StatusCode::ACCEPTED, Json(state.live.status().await)))
+    let started = NewAuditEvent {
+        client_ip,
+        target_type: Some("interface"),
+        target_id: Some(request.interface.chars().take(64).collect()),
+        details: json!({
+            "filter": request.filter,
+            "promiscuous": request.promiscuous,
+            "limits": applied,
+        }),
+        ..audit::by(user, "live.start")
+    };
+    let audit_state = state.clone();
+    tokio::spawn(async move { audit::record(&audit_state, started).await });
+    Ok(state.live.status().await)
 }
 
 /// Stop the running live capture (admin). It is then imported.
@@ -434,6 +475,7 @@ pub async fn start(
     tag = "live",
     responses(
         (status = 202, description = "Stopping", body = LiveStatus),
+        (status = 401, description = "Not signed in", body = ErrorResponse),
         (status = 403, description = "Needs the admin role, or missing CSRF token", body = ErrorResponse),
         (status = 409, description = "No capture is running", body = ErrorResponse),
     )
@@ -470,6 +512,7 @@ pub async fn stop(
 async fn finish_when_done(
     state: AppState,
     started_by: CurrentUser,
+    client_ip: Option<std::net::IpAddr>,
     file: tempfile::NamedTempFile,
     permit: Arc<tokio::sync::OwnedSemaphorePermit>,
     interface: String,
@@ -546,6 +589,7 @@ async fn finish_when_done(
             current.status.capture_id = Some(detail.session.id);
             tracing::info!(session_id = detail.session.id, "live capture stored");
             NewAuditEvent {
+                client_ip,
                 target_type: Some("capture"),
                 target_id: Some(detail.session.id.to_string()),
                 details: json!({
@@ -567,6 +611,7 @@ async fn finish_when_done(
             });
             tracing::warn!(code = err.code, "live capture failed");
             NewAuditEvent {
+                client_ip,
                 outcome: AuditOutcome::Failure,
                 details: json!({ "code": err.code }),
                 ..audit::by(&started_by, "live.finish")

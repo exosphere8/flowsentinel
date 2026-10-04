@@ -1701,6 +1701,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Needs the admin role, interface not allowed, or missing CSRF token",
             "content": {
@@ -1772,6 +1782,16 @@
               }
             }
           },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "Needs the admin role",
             "content": {
@@ -1799,6 +1819,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LiveStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -1843,6 +1873,16 @@
                   "items": {
                     "$ref": "#/components/schemas/Interface"
                   }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

@@ -6,8 +6,8 @@ limits and the API. [permissions.md](permissions.md) explains how to give the se
 permission it needs without running it as root.
 
 > **Capture only traffic you are authorized to inspect.** Every start requires an explicit
-> confirmation (`"authorized": true`). Every start, stop and result is recorded in the audit log
-> with the admin's account and address. Live capture is passive: it never sends packets, never
+> confirmation (`"authorized": true`). Every start (refused or not), stop and result is recorded
+> in the audit log with the admin's account and address. Live capture is passive: it never sends packets, never
 > decrypts anything, and changes nothing on the interface except promiscuous mode, which is off
 > unless requested.
 
@@ -135,7 +135,7 @@ and afterwards a link to the stored capture.
 
 | Action | Details |
 | --- | --- |
-| `live.start` | Interface, filter, promiscuous mode and the applied limits |
+| `live.start` | Interface, filter, promiscuous mode and the applied limits. Refused starts (not confirmed, interface not allowed, bad filter or limit, no permission, already running) are recorded with outcome `failure` or `denied` and the error code |
 | `live.stop` | Who asked |
 | `live.finish` | Success: stop reason, packets, dropped counts, the stored capture's ID. Failure: the error code |
 
@@ -185,6 +185,11 @@ CI builds and tests everything with libpcap. It then gives the test binary `CAP_
 - The captured packets exist on disk in the temporary file until the capture is imported, just
   like an uploaded file. Keep the upload directory on storage only the server can read.
 - One capture at a time; there is no continuous or scheduled capture.
+- If the server shuts down during a capture, the capture is abandoned: its temporary file is
+  deleted, nothing is imported, and no `live.finish` event is recorded.
+- Devices that carry no network traffic are never offered: D-Bus, Bluetooth, netfilter queues
+  (`nflog`, `nfqueue`), USB monitors, and Linux's `any`. Still, set
+  `FLOWSENTINEL_LIVE_INTERFACES` to the interfaces you mean to capture on.
 - Only Ethernet captures (link type 1) are decoded (see
   [protocol-decoding.md](protocol-decoding.md)). Ethernet interfaces and Linux's `lo` qualify.
   Linux's pseudo-interface `any` (Linux cooked capture), macOS loopback, and Wi-Fi in monitor

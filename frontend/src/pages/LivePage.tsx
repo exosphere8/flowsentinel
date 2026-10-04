@@ -10,6 +10,8 @@ import { useResource } from '../lib/useResource';
 import { useTitle } from '../lib/useTitle';
 
 const POLL_MS = 1000;
+/** Longest pause between polls after errors. */
+const MAX_RETRY_MS = 10_000;
 const ACTIVE = new Set(['capturing', 'importing']);
 
 function Unavailable({ error }: { error: ApiError }) {
@@ -197,16 +199,24 @@ export function LivePage() {
   useEffect(() => {
     let stopped = false;
     let timer: number | undefined;
+    let failures = 0;
     const controller = new AbortController();
     async function poll() {
       try {
         const next = await api.liveStatus(controller.signal);
         if (stopped) return;
+        failures = 0;
         setStatus(next);
         setError(null);
         if (ACTIVE.has(next.state)) timer = window.setTimeout(poll, POLL_MS);
       } catch (caught) {
-        if (!stopped && !controller.signal.aborted) setError(toApiError(caught));
+        if (stopped || controller.signal.aborted) return;
+        setError(toApiError(caught));
+        // Keep trying while a capture may be running, backing off.
+        if (active) {
+          failures += 1;
+          timer = window.setTimeout(poll, Math.min(POLL_MS * 2 ** failures, MAX_RETRY_MS));
+        }
       }
     }
     void poll();

@@ -350,3 +350,29 @@ fn an_idle_interface_still_stops_on_time() {
         asked.elapsed()
     );
 }
+
+#[test]
+fn an_empty_file_ends_the_replay_however_many_repeats() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.pcap");
+    // The classic header alone: no packets.
+    let mut header = Vec::new();
+    for part in [
+        0xa1b2_c3d4u32.to_le_bytes().to_vec(),
+        2u16.to_le_bytes().to_vec(),
+        4u16.to_le_bytes().to_vec(),
+        vec![0; 8],
+        65_535u32.to_le_bytes().to_vec(),
+        1u32.to_le_bytes().to_vec(),
+    ] {
+        header.extend(part);
+    }
+    std::fs::write(&path, header).unwrap();
+    let source = Box::new(ReplaySource::open(&path, 65_535, u32::MAX, None).unwrap());
+    let finished = session::start(source, ROOMY, io::sink())
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(finished.reason, StopReason::SourceEnded);
+    assert_eq!(finished.counters.seen, 0);
+}

@@ -66,6 +66,11 @@ The Compose `app` service drops all capabilities and cannot capture. To capture 
   refused, grant the capability to the binary in a derived image instead:
   `RUN setcap cap_net_raw=eip /usr/local/bin/flowsentinel-api`, with `libcap2-bin` installed.
   Keep `cap_add: [NET_RAW]`, because a file capability cannot exceed the container's bounding set.
+- **Check no-new-privileges.** Docker's documentation says `no-new-privileges` can stop file
+  capabilities from taking effect. On the Linux 6.18 kernel used in our review, a `cap_net_raw`
+  file capability still applied with no-new-privileges set, but this was not tested inside
+  Docker. If capture is refused in your setup, check `grep Cap /proc/1/status` in the container.
+  Lift no-new-privileges for this one service only if you must.
 
 The image and Compose file in this repository do none of this by default.
 

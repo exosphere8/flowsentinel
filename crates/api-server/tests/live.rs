@@ -406,6 +406,15 @@ async fn requests_are_checked_before_capturing() {
         assert_eq!((reply.status, reply.code()), (status, code), "{body}");
     }
     assert_eq!(h.status().await["state"], "idle");
+    // Each refused start that reached the handler is audited.
+    let refused = h.audit("live.start").await;
+    assert_eq!(refused.len(), 6);
+    assert!(refused.iter().all(|e| e["outcome"] == "failure"));
+    assert!(
+        refused
+            .iter()
+            .any(|e| e["details"]["code"] == "authorization_required")
+    );
 
     // Admins only.
     for (method, uri) in [
@@ -472,5 +481,9 @@ async fn live_capture_is_off_unless_enabled_and_built() {
         (reply.status, reply.code()),
         (StatusCode::FORBIDDEN, "interface_not_allowed")
     );
+    let denied = &h.audit("live.start").await[0];
+    assert_eq!(denied["outcome"], "denied");
+    assert_eq!(denied["target_id"], "replay0");
+    assert_eq!(denied["details"]["code"], "interface_not_allowed");
     h.db.drop_database().await;
 }

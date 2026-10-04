@@ -37,6 +37,21 @@ fn source_error(err: &pcap::Error) -> SourceError {
     }
 }
 
+/// Whether libpcap's device is a network interface. libpcap also lists
+/// devices that carry no network traffic (D-Bus, Bluetooth HCI, netfilter
+/// queues, USB buses) and Linux's `any`, whose cooked link type the decoder
+/// does not read; none of them can be captured on.
+pub fn is_network_interface(name: &str) -> bool {
+    const NOT_NETWORK: [&str; 6] = ["dbus-", "bluetooth", "nflog", "nfqueue", "usbmon", "any"];
+    !NOT_NETWORK.iter().any(|prefix| {
+        if *prefix == "any" {
+            name == "any"
+        } else {
+            name.starts_with(prefix)
+        }
+    })
+}
+
 /// libpcap's view of the machine's interfaces.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LibpcapFactory;
@@ -46,6 +61,7 @@ impl SourceFactory for LibpcapFactory {
         let devices = Device::list().map_err(|e| source_error(&e))?;
         Ok(devices
             .into_iter()
+            .filter(|device| is_network_interface(&device.name))
             .map(|device| InterfaceInfo {
                 loopback: device.flags.is_loopback(),
                 up: device.flags.is_up(),
@@ -187,6 +203,25 @@ mod tests {
             factory.check_filter("tcp\nport 80").unwrap_err().code(),
             "invalid_capture_filter"
         );
+    }
+
+    #[test]
+    fn only_network_interfaces_are_offered() {
+        for ok in ["eth0", "lo", "wlp2s0", "ens33", "ifb0", "anything0"] {
+            assert!(is_network_interface(ok), "{ok}");
+        }
+        for not in [
+            "any",
+            "dbus-system",
+            "bluetooth-monitor",
+            "nflog",
+            "nfqueue",
+            "usbmon1",
+        ] {
+            assert!(!is_network_interface(not), "{not}");
+        }
+        let listed = LibpcapFactory.interfaces().unwrap_or_default();
+        assert!(listed.iter().all(|i| is_network_interface(&i.name)));
     }
 
     #[test]
