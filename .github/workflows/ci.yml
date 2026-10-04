@@ -39,6 +39,20 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+  fixtures:
+    name: Fixtures are reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # Uses the runner's preinstalled Python 3; the generator needs only the standard library.
+      - name: Regenerate PCAP fixtures
+        run: python3 scripts/generate_pcap_fixtures.py
+      - name: Fail if fixtures changed
+        run: |
+          git status --porcelain fixtures
+          git diff --exit-code -- fixtures
+          test -z "$(git status --porcelain fixtures)"
+
   compose:
     name: Docker Compose services
     runs-on: ubuntu-latest

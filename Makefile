@@ -1,4 +1,4 @@
-.PHONY: help up down dev test lint fmt check
+.PHONY: help up down dev test lint fmt check fixtures
 
 CARGO ?= cargo
 
@@ -22,6 +22,9 @@ lint: ## Run clippy with warnings as errors
 
 fmt: ## Format all Rust code
 	$(CARGO) fmt --all
+
+fixtures: ## Regenerate the synthetic PCAP fixtures
+	python3 scripts/generate_pcap_fixtures.py
 
 check: ## Run the full CI gate: format check, lint, test, build
 	$(CARGO) fmt --all --check

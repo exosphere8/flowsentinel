@@ -14,9 +14,12 @@ heuristic alerts that a human can verify.
 
 ## Status
 
-FlowSentinel is built in milestones (see [Roadmap](#roadmap)). **Milestone 0, the foundation, is
-complete:** a Cargo workspace, an HTTP API with a health check, a CLI shell, Docker Compose
-services and CI.
+FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
+
+- **Milestone 0, foundation:** a Cargo workspace, an HTTP API with a health check, a CLI shell,
+  Docker Compose services and CI.
+- **Milestone 1, safe offline PCAP ingestion:** `flowsentinel inspect --pcap` reads classic
+  libpcap files with strict resource limits and reports container metadata only.
 
 ## Quick start
 
@@ -42,6 +45,18 @@ cargo run -p cli -- --version
 ```
 
 Stop the services with `docker compose down`. Add `-v` to also delete their data volumes.
+
+### Inspect a capture
+
+```bash
+cargo run -p cli -- inspect --pcap fixtures/pcap/le-usec.pcap
+cargo run -p cli -- inspect --pcap fixtures/pcap/many-packets.pcap --max-packets 5 --json
+```
+
+`inspect` prints a capture summary and a per-packet metadata table (index, timestamp, captured
+and original length), or one JSON object with `--json`. Packet contents are never shown. Limits
+default to 512 MiB, 100,000 packets and 60 seconds. See
+[docs/pcap-ingestion.md](docs/pcap-ingestion.md) for flags, output fields, warnings and exit codes.
 
 ### Windows note
 
@@ -75,6 +90,7 @@ authentication until Milestone 9.
 | `make lint` | Clippy with `-D warnings` |
 | `make test` | Run all tests |
 | `make check` | Full CI gate: format check, lint, test, build |
+| `make fixtures` | Regenerate the synthetic PCAP fixtures |
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [ARCHITECTURE.md](ARCHITECTURE.md) for the design.
 
@@ -83,10 +99,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [ARCHITECTURE.md](AR
 ```
 crates/
   api-server/   Axum HTTP service (GET /health)
+  capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
 docs/           Design and user documentation
-fixtures/       Synthetic test inputs only
-scripts/        Developer scripts
+fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
+scripts/        Developer scripts, including the fixture generator
 tests/          Cross-service end-to-end tests (from Milestone 5)
 ```
 
@@ -95,7 +112,7 @@ tests/          Cross-service end-to-end tests (from Milestone 5)
 | # | Milestone | State |
 | --- | --- | --- |
 | 0 | Foundation and developer environment | Done |
-| 1 | Safe offline PCAP ingestion | Planned |
+| 1 | Safe offline PCAP ingestion | Done |
 | 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Planned |
 | 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Planned |
 | 4 | Bidirectional flow reconstruction | Planned |
