@@ -23,6 +23,7 @@ fn fixture(name: &str) -> PathBuf {
 
 fn meta(name: &str) -> ImportMeta {
     ImportMeta {
+        source: storage::CaptureSource::Upload,
         file_name: name.to_owned(),
         sha256: "0".repeat(64),
         ttl_days: 30,

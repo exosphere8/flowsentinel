@@ -1662,6 +1662,264 @@
         }
       }
     },
+    "/api/v1/live/captures": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Start a live capture (admin).",
+        "description": "Requires `\"authorized\": true`. Promiscuous mode is off unless requested.\nAt most one capture runs at a time; it stops at its first limit or when\nasked, and is then imported as a capture with source `live`.",
+        "operationId": "start",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiveStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Capturing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not confirmed as authorized, unknown interface, invalid filter or limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role, interface not allowed, or missing CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A capture is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many imports in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This build has no live capture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Live capture is turned off, or the server lacks capture permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live/captures/current": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "The current or most recent live capture (admin).",
+        "operationId": "status",
+        "responses": {
+          "200": {
+            "description": "Status and counters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live/captures/current/stop": {
+      "post": {
+        "tags": [
+          "live"
+        ],
+        "summary": "Stop the running live capture (admin). It is then imported.",
+        "operationId": "stop",
+        "responses": {
+          "202": {
+            "description": "Stopping",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiveStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role, or missing CSRF token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "No capture is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/live/interfaces": {
+      "get": {
+        "tags": [
+          "live"
+        ],
+        "summary": "List the interfaces live capture may use (admin).",
+        "operationId": "interfaces",
+        "responses": {
+          "200": {
+            "description": "Interfaces, filtered by FLOWSENTINEL_LIVE_INTERFACES",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Interface"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Needs the admin role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "This build has no live capture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Live capture is turned off, or the server lacks capture permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/overview": {
       "get": {
         "tags": [
@@ -2305,6 +2563,38 @@
         },
         "additionalProperties": false
       },
+      "AppliedLiveLimits": {
+        "type": "object",
+        "description": "The applied limits of a capture.",
+        "required": [
+          "max_packets",
+          "max_bytes",
+          "max_seconds",
+          "snaplen"
+        ],
+        "properties": {
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_packets": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "snaplen": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "AuditEvent": {
         "type": "object",
         "description": "A stored audit event.",
@@ -2757,6 +3047,213 @@
               "null"
             ],
             "format": "int64"
+          }
+        }
+      },
+      "Interface": {
+        "type": "object",
+        "description": "A network interface.",
+        "required": [
+          "name",
+          "addresses",
+          "loopback",
+          "up"
+        ],
+        "properties": {
+          "addresses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "loopback": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "up": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LiveStart": {
+        "type": "object",
+        "description": "Body of `POST /live/captures`. Limits left out take the defaults\n(60 s, 100,000 packets, 100 MiB, 65,535-byte snapshots) within the\nserver's maximums.",
+        "required": [
+          "interface",
+          "authorized"
+        ],
+        "properties": {
+          "authorized": {
+            "type": "boolean",
+            "description": "Must be `true`: you confirm that you own this network or are\nauthorized to capture its traffic."
+          },
+          "filter": {
+            "type": "string",
+            "description": "Optional BPF capture filter, for example `tcp port 443`."
+          },
+          "interface": {
+            "type": "string",
+            "description": "An interface name from `GET /live/interfaces`."
+          },
+          "max_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_packets": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "promiscuous": {
+            "type": "boolean",
+            "description": "Capture traffic not addressed to this host. Off by default."
+          },
+          "snaplen": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
+      "LiveStatus": {
+        "type": "object",
+        "description": "The current or most recent live capture.",
+        "required": [
+          "state",
+          "promiscuous",
+          "elapsed_seconds",
+          "packets_seen",
+          "packets_written",
+          "bytes_written",
+          "dropped_backpressure",
+          "dropped_by_system"
+        ],
+        "properties": {
+          "bytes_written": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "capture_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The stored capture, once imported."
+          },
+          "dropped_backpressure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Dropped because the file writer fell behind.",
+            "minimum": 0
+          },
+          "dropped_by_system": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Dropped by the kernel or the interface, as the system reports them.",
+            "minimum": 0
+          },
+          "elapsed_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ErrorBody"
+              }
+            ]
+          },
+          "filter": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "interface": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limits": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AppliedLiveLimits"
+              }
+            ]
+          },
+          "packets_seen": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "packets_written": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "promiscuous": {
+            "type": "boolean"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339 UTC."
+          },
+          "started_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "description": "`idle` (none yet), `capturing`, `importing`, `finished` or `failed`."
+          },
+          "stop_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`requested`, `packet_limit_reached`, `byte_limit_reached`,\n`time_limit_reached` or `source_ended`."
           }
         }
       },
@@ -4575,6 +5072,10 @@
     {
       "name": "audit",
       "description": "Security audit log (admin)"
+    },
+    {
+      "name": "live",
+      "description": "Authorized live capture (admin; off unless enabled)"
     }
   ]
 }

@@ -6,7 +6,7 @@ use utoipa::{Modify, OpenApi};
 
 use crate::auth::COOKIE_NAME;
 use crate::error::{ErrorBody, ErrorResponse};
-use crate::{accounts, routes};
+use crate::{accounts, live, routes};
 
 /// Declares the session cookie as the API's authentication.
 struct SessionCookie;
@@ -48,6 +48,10 @@ impl Modify for SessionCookie {
         accounts::update_user,
         accounts::delete_user,
         accounts::list_audit,
+        live::interfaces,
+        live::start,
+        live::status,
+        live::stop,
         routes::overview,
         routes::import_capture,
         routes::list_captures,
@@ -99,6 +103,10 @@ impl Modify for SessionCookie {
         accounts::PasswordChange,
         accounts::NewUser,
         accounts::UserPatch,
+        live::LiveStart,
+        live::LiveStatus,
+        live::Interface,
+        live::AppliedLiveLimits,
     )),
     tags(
         (name = "captures", description = "Import, list and delete captures"),
@@ -111,6 +119,7 @@ impl Modify for SessionCookie {
         (name = "auth", description = "Sign-in sessions and passwords"),
         (name = "users", description = "Account management (admin)"),
         (name = "audit", description = "Security audit log (admin)"),
+        (name = "live", description = "Authorized live capture (admin; off unless enabled)"),
     )
 )]
 pub struct ApiDoc;

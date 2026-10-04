@@ -14,6 +14,8 @@ Contributions are welcome. FlowSentinel is security software, so the bar for saf
 1. Install stable Rust (1.85 or newer) with `rustfmt` and `clippy`:
    `rustup component add rustfmt clippy`
 2. Install Docker with Compose v2 (needed only for `make up`).
+   For live capture work, also install libpcap's headers (`sudo apt-get install libpcap-dev` on
+   Debian and Ubuntu) and add `--features api-server/live-capture` to cargo commands.
 3. For the dashboard, install Node.js 22.22 or newer with npm.
 4. Copy the environment template and set real local passwords:
    `cp .env.example .env`

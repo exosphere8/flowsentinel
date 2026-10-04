@@ -20,11 +20,31 @@ use crate::{SessionDetail, Storage, StorageError};
 /// statement; the widest insert here binds 26 columns per row.
 const BATCH_ROWS: usize = 1_000;
 
+/// Where a capture came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaptureSource {
+    /// A file uploaded through the API.
+    Upload,
+    /// Recorded live from a network interface.
+    Live,
+}
+
+impl CaptureSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Upload => "upload",
+            Self::Live => "live",
+        }
+    }
+}
+
 /// Facts about the imported file that the analysis does not contain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportMeta {
     /// Sanitized display name of the uploaded file (1-160 characters).
     pub file_name: String,
+    /// Where the capture came from.
+    pub source: CaptureSource,
     /// Lowercase hex SHA-256 of the file.
     pub sha256: String,
     /// Days until the session expires (1-3650).
@@ -321,7 +341,7 @@ async fn insert_session(
          original_bytes_total, first_packet_ns, last_packet_ns, flows_total, flows_stored, \
          capture_warnings, decode_summary, flow_summary, alerts_total, detection_summary, \
          expires_at) \
-         VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13, $14, $15, \
+         VALUES ($1, $2, $3, $24, $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13, $14, $15, \
          $16, $17, $18, $19, $20, $21, $22, now() + make_interval(days => $23)) RETURNING id",
     )
     .bind(&meta.file_name)
@@ -355,6 +375,7 @@ async fn insert_session(
         None => serde_json::json!({}),
     })
     .bind(meta.ttl_days)
+    .bind(meta.source.as_str())
     .fetch_one(&mut **tx)
     .await?;
     Ok(id)

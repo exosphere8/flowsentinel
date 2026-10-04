@@ -15,7 +15,7 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 9)
+## Current components (Milestone 10)
 
 ```
   browser: dashboard (React, served at /)
@@ -237,6 +237,29 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
   end-reason counts, ignored timestamp outliers and confirmed clock jumps.
 - Depends on `capture` (timestamps) and `decoder` (layers) only.
 
+### `crates/live-capture`
+
+Authorized live capture (see [docs/live-capture.md](docs/live-capture.md)).
+
+- `source.rs` defines `PacketSource` (one open interface or file) and `SourceFactory` (lists
+  interfaces, compiles filters, opens sources), with stable error codes.
+  - `libpcap.rs` (feature `libpcap`, the only module that touches libpcap) opens interfaces with
+    promiscuous mode off unless asked, non-blocking reads (libpcap's read timeout does not start
+    on an idle Linux interface) and the snapshot length. It
+    compiles BPF filters on a "dead" handle before capturing.
+  - `replay.rs` replays a capture file, so tests need neither network access nor privileges.
+  - Builds without the feature use `Unavailable`.
+- `session.rs` runs one capture on two threads. The capture thread hands packets to the writer
+  through a `sync_channel` of 1,024 packets with `try_send`: when the writer is behind, packets
+  are dropped and counted, never queued without bound. It stops at the first of the time,
+  packet and byte limits, a stop request or the source's end. `writer.rs` writes classic pcap
+  and hashes it on the way.
+- `limits.rs` resolves requested limits against the server's maximums. `bpf.rs` checks filter
+  text before libpcap sees it.
+- In `api-server`, `live.rs` holds the single capture slot (`LiveManager`), the admin-only
+  endpoints and the background task that, when a capture ends, imports its file through the
+  same `store_file` path as uploads (source `live`) and deletes it.
+
 ### `crates/cli`
 
 - A `clap` derive parser producing the `flowsentinel` binary. A bare invocation prints help.
@@ -284,7 +307,7 @@ metadata API, same-origin.
 
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
-| `capture` | 10 | Live capture via libpcap (offline reading is done) |
+| (none) | 11 | Metrics, tracing and further hardening |
 
 Data will flow in one direction:
 

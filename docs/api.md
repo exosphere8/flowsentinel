@@ -136,6 +136,7 @@ All paths are under `/api/v1`. IDs are integers.
 | `POST /auth/login`, `GET /auth/session`, `POST /auth/logout`, `PUT /auth/password` | Sessions and passwords (see [authentication.md](authentication.md#endpoints)) |
 | `GET /users`, `POST /users`, `PATCH /users/{id}`, `DELETE /users/{id}` | Accounts (admin) |
 | `GET /audit` | The audit log (admin) |
+| `GET /live/interfaces`, `POST /live/captures`, `GET /live/captures/current`, `POST /live/captures/current/stop` | Authorized live capture (admin; see [live-capture.md](live-capture.md)) |
 | `GET /health` (no prefix) | Liveness: `{"status":"ok","service":"flowsentinel-api"}` |
 | `GET /` and other paths outside `/api/v1` (no prefix) | The dashboard, when `FLOWSENTINEL_DASHBOARD_DIR` is set; otherwise `404` |
 

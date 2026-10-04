@@ -9,6 +9,9 @@ import type {
   FilterField,
   FlowDetail,
   FlowSummaryRow,
+  Interface,
+  LiveStart,
+  LiveStatus,
   Overview,
   PacketDetail,
   PacketSummary,
@@ -223,6 +226,14 @@ export const api = {
   updateUser: (id: number, patch: UserPatch) => request<User>(`/users/${id}`, json('PATCH', patch)),
 
   deleteUser: (id: number) => request<undefined>(`/users/${id}`, { method: 'DELETE' }),
+
+  liveInterfaces: (signal?: AbortSignal) => request<Interface[]>('/live/interfaces', { signal }),
+
+  liveStatus: (signal?: AbortSignal) => request<LiveStatus>('/live/captures/current', { signal }),
+
+  startLive: (start: LiveStart) => request<LiveStatus>('/live/captures', json('POST', start)),
+
+  stopLive: () => request<LiveStatus>('/live/captures/current/stop', { method: 'POST' }),
 
   listAudit: (query: AuditQuery, signal?: AbortSignal) =>
     request<Paged<AuditEvent>>(`/audit${buildQuery({ ...query })}`, { signal }),

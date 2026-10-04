@@ -52,6 +52,7 @@ Further accounts are created by an admin on the dashboard's **Users** page or wi
 | Change an alert's triage status | | ✓ | ✓ |
 | Delete captures | | | ✓ |
 | Change retention settings | | | ✓ |
+| Live capture: list interfaces, start, stop, see status | | | ✓ |
 | Create, change, disable and delete accounts | | | ✓ |
 | Read the audit log | | | ✓ |
 
@@ -210,6 +211,7 @@ request is not undone.
 | `capture.delete` | A capture is deleted | |
 | `alert.status_change` | Triage | `status`, `rule_id` |
 | `settings.retention_change` | Retention settings change | the new values |
+| `live.start`, `live.stop`, `live.finish` | Live capture (see [live-capture.md](live-capture.md#audit)) | interface, filter, promiscuous mode, limits; result |
 
 What the audit log never holds:
 

@@ -11,6 +11,7 @@ import { AuditPage } from './pages/AuditPage';
 import { CapturesPage } from './pages/CapturesPage';
 import { FlowDetailPage } from './pages/FlowDetailPage';
 import { FlowsPage } from './pages/FlowsPage';
+import { LivePage } from './pages/LivePage';
 import { LoginPage } from './pages/LoginPage';
 import { NotFoundPage } from './pages/NotFoundPage';
 import { OverviewPage } from './pages/OverviewPage';
@@ -51,6 +52,14 @@ export const routes: RouteObject[] = [
             element: (
               <RequireRole role="admin">
                 <UsersPage />
+              </RequireRole>
+            ),
+          },
+          {
+            path: 'live',
+            element: (
+              <RequireRole role="admin">
+                <LivePage />
               </RequireRole>
             ),
           },

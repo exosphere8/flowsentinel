@@ -161,6 +161,7 @@ async fn main() -> ExitCode {
             detection,
             dashboard_dir: config.dashboard_dir.clone(),
             auth: config.auth,
+            live: config.live(),
         },
         config.max_concurrent_imports,
     );

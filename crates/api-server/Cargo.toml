@@ -11,6 +11,7 @@ publish.workspace = true
 
 [dependencies]
 analysis.workspace = true
+live-capture.workspace = true
 argon2.workspace = true
 axum.workspace = true
 capture.workspace = true
@@ -31,6 +32,10 @@ tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 utoipa.workspace = true
+
+[features]
+# Live capture through libpcap (needs libpcap-dev on Linux; see docs/live-capture.md).
+live-capture = ["live-capture/libpcap"]
 
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }
