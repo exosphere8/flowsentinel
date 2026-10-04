@@ -4,7 +4,6 @@ Unit and integration tests live next to the code they cover:
 
 | Location | What it covers |
 | --- | --- |
-| `crates/api-server/src/lib.rs` | Configuration parsing |
 | `crates/api-server/tests/health.rs` | `GET /health` in-process and over a real TCP socket |
 | `crates/capture/src/*.rs` | PCAP header, record, timestamp, limit and path validation units |
 | `crates/capture/tests/fixtures.rs` | Every committed fixture in `fixtures/pcap/` |
@@ -23,6 +22,16 @@ Unit and integration tests live next to the code they cover:
 | `crates/flow-engine/src/*.rs` | Flow keys, running statistics |
 | `crates/flow-engine/tests/flows.rs` | Direction, initiator inference, TCP states, expiry, eviction, retention, statistics, timestamps, determinism; property test that packet and byte totals are conserved |
 | `crates/cli/tests/flows.rs` | `flowsentinel flows` against `flows-mixed.pcap`: every flow, sorting, limits, exit codes, payload privacy |
+| `crates/analysis/tests/pipeline.rs` | Both analysis passes agree; packets carry flow IDs; a file changed between passes is detected |
+| `crates/api-server/src/*.rs` | Configuration parsing, `Host` checks, upload rate and stale-file cleanup |
 
-This directory is reserved for end-to-end tests that span several services,
-such as the API with PostgreSQL. Those arrive with persistence in Milestone 5.
+Tests that need PostgreSQL create a disposable database per test (see
+[CONTRIBUTING.md](../CONTRIBUTING.md#database-tests)):
+
+| Location | What it covers |
+| --- | --- |
+| `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, no secrets stored |
+| `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, OpenAPI, no secrets in any response |
+
+This directory is reserved for end-to-end tests that span several processes, such as the
+dashboard against a running API (Milestone 8).

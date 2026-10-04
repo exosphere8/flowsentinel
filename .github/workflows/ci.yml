@@ -39,6 +39,43 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+  msrv:
+    name: Minimum supported Rust (1.85)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+  database:
+    name: Database tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          # Throwaway server for this job only; no password is needed.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      FLOWSENTINEL_TEST_DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
+      # Fail instead of skipping if the URL above is ever missing.
+      FLOWSENTINEL_REQUIRE_DB_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Storage and API tests
+        run: cargo test --locked -p storage -p api-server
+
   fixtures:
     name: Fixtures are reproducible
     runs-on: ubuntu-latest

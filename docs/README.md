@@ -10,6 +10,8 @@
 | [protocol-decoding.md](protocol-decoding.md) | `inspect --decode`: protocols, statuses, warnings, validation rules |
 | [application-metadata.md](application-metadata.md) | DNS, DHCP, HTTP and TLS handshake metadata: recognition, fields, limits, redaction |
 | [flow-engine.md](flow-engine.md) | `flowsentinel flows`: flow keys, direction, statistics, TCP state, expiry, memory limits |
+| [api.md](api.md) | REST API: running, importing, endpoints, pagination, sorting, errors |
+| [data-retention.md](data-retention.md) | What is stored, what never is, retention settings and deletion |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 
-Each later milestone adds its own document here, for example `api.md`.
+Each later milestone adds its own document here.

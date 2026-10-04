@@ -15,39 +15,80 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 4)
+## Current components (Milestone 5)
 
 ```
-                +--------------------+
-  curl -------> | api-server (Axum)  |  GET /health -> {"status":"ok","service":"flowsentinel-api"}
-                +--------------------+
-  shell ------> | cli (flowsentinel) |  --version, --help, inspect --pcap [--decode [--verbose]], flows --pcap
-                +----+-----------+---+
-                     |           |
-                +----v-------+   |  PacketSink: borrowed bytes, one packet at a time
-  .pcap file -> |  capture   +---+------------------+
-                +------------+   |                  |
-                     CaptureReport            +-----v------+
-                                              |  decoder   |  bytes -> DecodedPacket (layers incl. DNS/DHCP/HTTP/TLS, status, warnings)
-                                              +-----+------+
-                                                    |  &DecodedPacket + record metadata
-                                              +-----v-------+
-                                              | flow-engine |  -> FlowRecord (bidirectional stats, TCP state, app metadata)
-                                              +-------------+
+  curl / client --HTTP--> +--------------------+  /health, /api/v1/... (JSON, OpenAPI)
+                          | api-server (Axum)  |-- stream upload --> private temp file (.pcap)
+                          +----+-----------+---+
+                               |           |  SQL (parameterized, one transaction per import)
+            spawn_blocking     |      +----v-----+
+                               |      | storage  |--> PostgreSQL 16 (sessions, packets, flows,
+                               |      +----^-----+     DNS/HTTP/TLS events, retention)
+                          +----v-----+     |  PacketRow batches (bounded queue)
+  shell --> cli --------> | analysis |-----+   pass 1: summaries + flows + fingerprint
+            (inspect,     +----+-----+         pass 2: packets with flow IDs, in batches
+             flows)            |
+                +--------------v--------------------------------+
+                | capture -> decoder -> flow-engine             |  PacketSink: borrowed bytes,
+                | (limits)   (layers)    (FlowRecord)           |  one packet at a time
+                +-----------------------------------------------+
 
-  docker compose: PostgreSQL 16, Redis 7 (started and health-checked; not yet used by code)
+  docker compose: PostgreSQL 16 (used by the API), Redis 7 (started; not yet used)
 ```
 
 ### `crates/api-server`
 
-- `lib.rs` holds the router (`app()`) and `Config`. Keeping these in a library lets tests drive
-  the real router in-process (`tower::ServiceExt::oneshot`) and over a real socket.
-- `main.rs` initializes structured JSON logging (`tracing-subscriber`), loads configuration from
-  the environment, binds the listener and serves with graceful shutdown on Ctrl+C or SIGTERM.
+- `lib.rs` holds `Config` and two routers: `app()` (health only) and `app_with_state()` (health
+  plus `/api/v1`). Keeping them in a library lets tests drive the real router in-process
+  (`tower::ServiceExt::oneshot`) and over a real socket. See [docs/api.md](docs/api.md).
+- `main.rs` initializes structured JSON logging (`tracing-subscriber`) and loads configuration
+  from the environment. It connects to PostgreSQL, applies migrations, starts the hourly
+  retention purge, binds the listener and serves with graceful shutdown on Ctrl+C or SIGTERM. It
+  refuses to start without a valid `FLOWSENTINEL_DATABASE_URL`. The URL is never logged:
+  `Config`'s `Debug` output redacts it.
+- `routes.rs` holds the handlers, annotated for `utoipa`; `openapi.rs` assembles the OpenAPI
+  document. `extract.rs` wraps axum's `Query`, `Path` and `Json` extractors so malformed requests
+  get the same JSON error shape (`error.rs`) as everything else.
+- `upload.rs` streams a request body to a private temporary file, enforcing the size limit, an
+  idle timeout and a minimum average rate, and computing the SHA-256 on the way. The import handler then runs both analysis
+  passes on blocking threads. Pass 2 hands packet batches to the async database writer through a
+  bounded channel, so a large upload never sits in memory.
+- `host.rs` refuses requests whose `Host` header is not a name of the server (DNS-rebinding
+  protection). `state.rs` holds the import and read semaphores: reads get the database pool
+  minus two connections per import slot, so heavy reading cannot starve imports.
+- At startup the server deletes upload files left by a run that was killed; on shutdown it gives
+  running requests 30 seconds.
 - Configuration is read through an injectable lookup (`Config::from_lookup`), so tests never
   mutate process-global environment variables.
 - The default bind address is `127.0.0.1:8080`. Binding elsewhere logs a warning until
   authentication exists.
+
+### `crates/analysis`
+
+The pipeline shared by front ends. `analyze_file` reads a capture once through
+`capture → decoder → flow-engine`. It keeps the report without per-record data, the decode
+summary, the finished flows, and a fingerprint of the packets that will be replayed.
+`replay_packets` reads the first N packets again and replays the deterministic flow engine to
+recover each packet's flow ID. It yields packets in batches and fingerprints what it read; the
+caller compares the fingerprints and discards the result if the file changed.
+
+### `crates/storage`
+
+PostgreSQL persistence with SQLx. See [docs/data-retention.md](docs/data-retention.md).
+
+- `migrations/` holds the schema, embedded in the binary (`sqlx::migrate!`) and checksum-verified
+  at startup. No column can hold payload bytes.
+- Every query is parameterized. Sort orders are enums that map to fixed SQL fragments. Extra
+  `WHERE` conditions come through the `SqlCondition` trait, whose implementations push only fixed
+  SQL text and bind every value.
+- `ImportTransaction` writes a capture in one transaction: `begin_import` inserts the session and
+  flows, `add_packets` inserts packet batches and their DNS/HTTP/TLS events, and `commit`
+  publishes them. Dropping it rolls everything back.
+- `PacketRow::from_analyzed` extracts indexed columns and serializes metadata to JSON text off the
+  async runtime; `add_packets` moves the rows into the insert, so metadata is never copied.
+- Feature `test-support` provides `testing::TestDatabase`, a migrated database created per test
+  and dropped afterwards, even if the test panics.
 
 ### `crates/capture`
 
@@ -158,7 +199,6 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `storage` | 5 | SQLx/PostgreSQL persistence with migrations and retention |
 | `filter-language` | 6 | Display-filter lexer, parser, validator and parameterized SQL translation |
 | `detection-engine` | 7 | Configurable, explainable heuristics over flows and metadata |
 | `frontend/` | 8 | React + TypeScript dashboard |

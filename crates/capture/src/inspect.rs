@@ -36,6 +36,16 @@ impl CompletionState {
         self != Self::Complete
     }
 
+    /// Stable machine-readable name, as serialized: `complete`,
+    /// `packet_limit_reached` or `time_limit_reached`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Complete => "complete",
+            Self::PacketLimitReached => "packet_limit_reached",
+            Self::TimeLimitReached => "time_limit_reached",
+        }
+    }
+
     /// Human-readable description.
     pub fn as_str(self) -> &'static str {
         match self {
