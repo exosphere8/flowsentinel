@@ -222,6 +222,225 @@ def decode_fixtures() -> dict[str, bytes]:
     }
 
 
+# --- Application-protocol builders (Milestone 3) ---------------------------
+#
+# Every credential-like value below contains SECRET_MARKER. Tests assert that
+# no FlowSentinel output ever contains it, which proves redaction works.
+
+SECRET_MARKER = b"FLOWSENTINEL-SECRET"
+DNS_SERVER = bytes([192, 0, 2, 53])
+WEB_SERVER = bytes([198, 51, 100, 80])
+
+
+def dns_name(name: str) -> bytes:
+    out = b""
+    for label in name.split("."):
+        out += bytes([len(label)]) + label.encode()
+    return out + b"\x00"
+
+
+def dns_header(ident: int, flags: int, qd: int, an: int, ns: int = 0, ar: int = 0) -> bytes:
+    return struct.pack("!HHHHHH", ident, flags, qd, an, ns, ar)
+
+
+def dns_question(name: str, qtype: int, qclass: int = 1) -> bytes:
+    return dns_name(name) + struct.pack("!HH", qtype, qclass)
+
+
+def dns_rr(name: bytes, rtype: int, ttl: int, rdata: bytes, rclass: int = 1) -> bytes:
+    return name + struct.pack("!HHIH", rtype, rclass, ttl, len(rdata)) + rdata
+
+
+def udp_ip(src: bytes, dst: bytes, sport: int, dport: int, payload: bytes, ident: int = 1) -> bytes:
+    return eth(0x0800, ipv4(17, udp(sport, dport, payload), ident=ident, src=src, dst=dst))
+
+
+def tcp_ip(src: bytes, dst: bytes, sport: int, dport: int, payload: bytes, seq: int = 1) -> bytes:
+    return eth(0x0800, ipv4(6, tcp(sport, dport, TCP_PSH | TCP_ACK, seq, 1, payload), src=src, dst=dst))
+
+
+def dns_frames() -> list[bytes]:
+    q = dns_header(0x1A2B, 0x0100, 1, 0) + dns_question("www.example.com", 1)
+    # Response: CNAME www.example.com -> web.example.com, A web.example.com.
+    # Names are compressed: 0xC00C points to the question name at offset 12.
+    cname_target = b"\x03web" + b"\xc0\x10"  # "web" + pointer to "example.com"
+    resp = (
+        dns_header(0x1A2B, 0x8180, 1, 2)
+        + dns_question("www.example.com", 1)
+        + dns_rr(b"\xc0\x0c", 5, 300, cname_target)
+        + dns_rr(b"\xc0\x2d", 1, 60, WEB_SERVER)
+    )
+    aaaa_q = dns_header(0x0002, 0x0100, 1, 0) + dns_question("www.example.com", 28)
+    aaaa_r = (
+        dns_header(0x0002, 0x8180, 1, 1)
+        + dns_question("www.example.com", 28)
+        + dns_rr(b"\xc0\x0c", 28, 60, bytes.fromhex("20010db8000000000000000000000080"))
+    )
+    nx = dns_header(0x0003, 0x8183, 1, 0) + dns_question("missing.example", 1)
+    mx = (
+        dns_header(0x0004, 0x8180, 1, 1)
+        + dns_question("example.com", 15)
+        + dns_rr(b"\xc0\x0c", 15, 3600, struct.pack("!H", 10) + b"\x04mail\xc0\x0c")
+    )
+    txt = (
+        dns_header(0x0005, 0x8180, 1, 1)
+        + dns_question("example.com", 16)
+        + dns_rr(b"\xc0\x0c", 16, 60, bytes([len(SECRET_MARKER) + 4]) + SECRET_MARKER + b"-TXT")
+    )
+    mdns = dns_header(0, 0x8400, 0, 1) + dns_rr(
+        dns_name("printer.local"), 1, 120, bytes([192, 0, 2, 77]), rclass=0x8001
+    )
+    # Answer name is a compression loop: pointer to itself.
+    loop_answer = dns_header(0x0006, 0x8180, 1, 1) + dns_question("loop.example", 1)
+    loop_answer += b"\xc0" + bytes([len(loop_answer)]) + struct.pack("!HHIH", 1, 1, 60, 4) + bytes(4)
+    tcp_query = dns_header(0x0007, 0x0100, 1, 0) + dns_question("www.example.com", 1)
+    return [
+        udp_ip(IP_A, DNS_SERVER, 53000, 53, q),
+        udp_ip(DNS_SERVER, IP_A, 53, 53000, resp),
+        udp_ip(IP_A, DNS_SERVER, 53001, 53, aaaa_q),
+        udp_ip(DNS_SERVER, IP_A, 53, 53001, aaaa_r),
+        udp_ip(DNS_SERVER, IP_A, 53, 53002, nx),
+        udp_ip(DNS_SERVER, IP_A, 53, 53003, mx),
+        udp_ip(DNS_SERVER, IP_A, 53, 53004, txt),
+        eth(0x0800, ipv4(17, udp(5353, 5353, mdns), src=bytes([192, 0, 2, 77]), dst=bytes([224, 0, 0, 251]))),
+        udp_ip(DNS_SERVER, IP_A, 53, 53005, loop_answer),
+        tcp_ip(IP_A, DNS_SERVER, 53006, 53, struct.pack("!H", len(tcp_query)) + tcp_query),
+        udp_ip(IP_A, DNS_SERVER, 53007, 53, PAYLOAD_MARKER),  # not DNS
+        udp_ip(DNS_SERVER, IP_A, 53, 53000, resp),  # cut by the snapshot length below
+    ]
+
+
+def dhcp_message(op: int, msg_type: int, xid: int, yiaddr: bytes, options: bytes,
+                 ciaddr: bytes = bytes(4), broadcast: bool = True) -> bytes:
+    fixed = struct.pack("!BBBBIHH", op, 1, 6, 0, xid, 0, 0x8000 if broadcast else 0)
+    siaddr = GATEWAY if op == 2 else bytes(4)  # only server replies name a server
+    fixed += ciaddr + yiaddr + siaddr + bytes(4)
+    fixed += MAC_A + bytes(10) + bytes(64) + bytes(128)
+    return fixed + struct.pack("!I", 0x63825363) + bytes([53, 1, msg_type]) + options + b"\xff"
+
+
+def dhcp_frames() -> list[bytes]:
+    zero, bcast = bytes(4), b"\xff" * 4
+    client_id = bytes([61, 7, 1]) + MAC_A
+    params = bytes([55, 4, 1, 3, 6, 15])
+    hostname = bytes([12, 11]) + b"lab-host-01"
+    discover = dhcp_message(1, 1, 0x3903F326, zero, client_id + params + hostname)
+    offer = dhcp_message(2, 2, 0x3903F326, IP_A,
+                         bytes([54, 4]) + GATEWAY + bytes([51, 4]) + struct.pack("!I", 86400))
+    request = dhcp_message(1, 3, 0x3903F326, zero,
+                           bytes([50, 4]) + IP_A + bytes([54, 4]) + GATEWAY + hostname)
+    ack = dhcp_message(2, 5, 0x3903F326, IP_A,
+                       bytes([54, 4]) + GATEWAY + bytes([51, 4]) + struct.pack("!I", 86400))
+    return [
+        eth(0x0800, ipv4(17, udp(68, 67, discover), src=zero, dst=bcast), dst=BROADCAST),
+        eth(0x0800, ipv4(17, udp(67, 68, offer), src=GATEWAY, dst=IP_A), src=MAC_B, dst=MAC_A),
+        eth(0x0800, ipv4(17, udp(68, 67, request), src=zero, dst=bcast), dst=BROADCAST),
+        eth(0x0800, ipv4(17, udp(67, 68, ack), src=GATEWAY, dst=IP_A), src=MAC_B, dst=MAC_A),
+        eth(0x0800, ipv4(17, udp(68, 67, PAYLOAD_MARKER), src=zero, dst=bcast)),  # not DHCP
+    ]
+
+
+def http_frames() -> list[bytes]:
+    request = (
+        b"GET /index.html?session=" + SECRET_MARKER + b"-QUERY HTTP/1.1\r\n"
+        b"Host: www.example.com\r\n"
+        b"User-Agent: flowsentinel-fixture\r\n"
+        b"Authorization: Bearer " + SECRET_MARKER + b"-TOKEN\r\n"
+        b"Cookie: id=" + SECRET_MARKER + b"-COOKIE\r\n"
+        b"Accept: */*\r\n\r\n"
+    )
+    response = (
+        b"HTTP/1.1 200 OK\r\n"
+        b"Content-Type: text/html; charset=utf-8\r\n"
+        b"Content-Length: " + str(len(PAYLOAD_MARKER)).encode() + b"\r\n"
+        b"Set-Cookie: sid=" + SECRET_MARKER + b"-SETCOOKIE\r\n"
+        b"Connection: keep-alive\r\n\r\n" + PAYLOAD_MARKER
+    )
+    body = b"user=alice&password=" + SECRET_MARKER + b"-PASSWORD"
+    post = (
+        b"POST http://admin:" + SECRET_MARKER + b"-USERINFO@www.example.com/login HTTP/1.0\r\n"
+        b"Content-Type: application/x-www-form-urlencoded\r\n"
+        b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+    )
+    alt_port = b"HEAD /status HTTP/1.1\r\nHost: www.example.com:8080\r\n\r\n"
+    embedded = (
+        b"GET /fetch/http://admin:" + SECRET_MARKER + b"-EMBEDDED@db.example/x HTTP/1.1\r\n"
+        b"Host: www.example.com\r\n\r\n"
+    )
+    return [
+        tcp_ip(IP_A, WEB_SERVER, 40100, 80, request),
+        tcp_ip(WEB_SERVER, IP_A, 80, 40100, response),
+        tcp_ip(IP_A, WEB_SERVER, 40101, 80, post),
+        tcp_ip(IP_A, WEB_SERVER, 40102, 8080, alt_port),
+        tcp_ip(IP_A, WEB_SERVER, 40103, 80, PAYLOAD_MARKER),  # not HTTP
+        tcp_ip(IP_A, WEB_SERVER, 40104, 80, embedded),  # URL with credentials inside the path
+    ]
+
+
+def tls_extension(ext_type: int, data: bytes) -> bytes:
+    return struct.pack("!HH", ext_type, len(data)) + data
+
+
+def tls_record(handshake_type: int, body: bytes, record_version: int = 0x0301) -> bytes:
+    handshake = bytes([handshake_type]) + len(body).to_bytes(3, "big") + body
+    return struct.pack("!BHH", 22, record_version, len(handshake)) + handshake
+
+
+def client_hello(server_name: bytes) -> bytes:
+    random = SECRET_MARKER + b"-TLS-RANDOM!!"  # exactly 32 bytes
+    session = SECRET_MARKER + b"-SESSION-ID!!"  # exactly 32 bytes
+    assert len(random) == 32 and len(session) == 32
+    suites = [0x1A1A, 0x1301, 0x1302, 0x1303, 0xC02B, 0xC02F]
+    sni = struct.pack("!BH", 0, len(server_name)) + server_name
+    alpn_list = b"\x02h2\x08http/1.1"
+    extensions = b"".join([
+        tls_extension(0x0A0A, b""),  # GREASE
+        tls_extension(0, struct.pack("!H", len(sni)) + sni),
+        tls_extension(16, struct.pack("!H", len(alpn_list)) + alpn_list),
+        tls_extension(43, bytes([6]) + struct.pack("!HHH", 0x2A2A, 0x0304, 0x0303)),
+        tls_extension(10, struct.pack("!HHH", 4, 0x001D, 0x0017)),
+        tls_extension(51, struct.pack("!HHH", 38, 0x001D, 32) + SECRET_MARKER + b"-KEYSHARE-BYTE"),
+        tls_extension(13, struct.pack("!HHH", 4, 0x0403, 0x0804)),
+    ])
+    body = struct.pack("!H", 0x0303) + random + bytes([32]) + session
+    body += struct.pack("!H", 2 * len(suites)) + b"".join(struct.pack("!H", s) for s in suites)
+    body += b"\x01\x00" + struct.pack("!H", len(extensions)) + extensions
+    return tls_record(1, body)
+
+
+def server_hello() -> bytes:
+    random = SECRET_MARKER + b"-SRV-RANDOM!!!"[:13]
+    random = (random + b"!" * 32)[:32]
+    extensions = tls_extension(43, struct.pack("!H", 0x0304)) + tls_extension(
+        51, struct.pack("!HH", 0x001D, 32) + bytes(32)
+    )
+    body = struct.pack("!H", 0x0303) + random + bytes([0]) + struct.pack("!HB", 0x1301, 0)
+    body += struct.pack("!H", len(extensions)) + extensions
+    return tls_record(2, body, record_version=0x0303)
+
+
+def tls_frames() -> list[bytes]:
+    certificate = tls_record(11, b"\x00\x00\x10" + SECRET_MARKER[:16], record_version=0x0303)
+    app_data = struct.pack("!BHH", 23, 0x0303, len(PAYLOAD_MARKER)) + PAYLOAD_MARKER
+    return [
+        tcp_ip(IP_A, WEB_SERVER, 40200, 443, client_hello(b"www.example.com")),
+        tcp_ip(WEB_SERVER, IP_A, 443, 40200, server_hello()),
+        tcp_ip(WEB_SERVER, IP_A, 443, 40200, certificate),  # not a hello: unknown
+        tcp_ip(IP_A, WEB_SERVER, 40200, 443, app_data),  # encrypted data: unknown
+        tcp_ip(IP_A, WEB_SERVER, 40201, 8443, client_hello(b"api.example.org")),
+    ]
+
+
+def application_fixtures() -> dict[str, bytes]:
+    dns = dns_frames()
+    return {
+        "app-dns.pcap": capture_of(dns, cut={len(dns) - 1: 14 + 20 + 8 + 40}),
+        "app-dhcp.pcap": capture_of(dhcp_frames()),
+        "app-http.pcap": capture_of(http_frames()),
+        "app-tls.pcap": capture_of(tls_frames()),
+    }
+
+
 def global_header(
     endian: str,
     magic: int = MAGIC_USEC,
@@ -315,6 +534,7 @@ def fixtures() -> dict[str, bytes]:
         global_header(le) + good + struct.pack("<IIII", BASE_TIME + 1, 0, 0xFFFFFFF0, 0xFFFFFFF0)
     )
     files.update(decode_fixtures())
+    files.update(application_fixtures())
     return files
 
 

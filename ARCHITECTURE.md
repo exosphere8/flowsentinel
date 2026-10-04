@@ -15,7 +15,7 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 2)
+## Current components (Milestone 3)
 
 ```
                 +--------------------+
@@ -28,7 +28,7 @@ will live. It is updated at the end of every milestone.
   .pcap file -> |  capture   +---+------------------+
                 +------------+   |                  |
                      CaptureReport            +-----v------+
-                                              |  decoder   |  bytes -> DecodedPacket (layers, status, warnings)
+                                              |  decoder   |  bytes -> DecodedPacket (layers incl. DNS/DHCP/HTTP/TLS, status, warnings)
                                               +------------+
 
   docker compose: PostgreSQL 16, Redis 7 (started and health-checked; not yet used by code)
@@ -89,6 +89,16 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 - `DecodeSummary` aggregates statuses, protocols and warnings over a capture in memory bounded by
   the number of enum values.
 - `describe.rs` renders one-line summaries (`info`, `endpoints`, `Layer::describe`) for front ends.
+- `app/` decodes application metadata from TCP/UDP payloads (see
+  [docs/application-metadata.md](docs/application-metadata.md)). `app::decode` picks parsers by
+  port hint (UDP DNS/DHCP, TCP DNS) or by structure (TLS, HTTP on any TCP port) and gives each
+  at most 8 KiB. Parsers return `None` unless the structure is valid, plus a list of issues found
+  after recognition. The dispatcher maps "ran out of bytes" to `truncated` (snapshot length),
+  `application_limit_reached` (8 KiB cap) or `incomplete_application_data` (TCP segmentation).
+  Transport parsers call it only for non-fragmented packets with consistent lengths.
+- Each application model (`DnsMessage`, `DhcpMessage`, `HttpMessage`, `TlsHandshake`) holds
+  only bounded, sanitized fields. Credential-bearing HTTP headers are matched by name and their
+  values are never read; TLS randoms, key shares and certificates are skipped, not copied.
 - The crate does not depend on `capture`; it takes a raw link-type number so live capture
   (Milestone 10) can reuse it.
 
@@ -97,8 +107,11 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 - A `clap` derive parser producing the `flowsentinel` binary. A bare invocation prints help.
 - `inspect` renders a `CaptureReport` as tables or one JSON object. Exit codes: 0 success
   (including partial results), 2 usage, 3 rejected input, 4 malformed capture, 5 I/O.
-- With `--decode`, `decode_view::DecodeCollector` is passed to `capture` as a `PacketSink`. It
-  decodes each packet as it is read and keeps only the `DecodedPacket`.
+- With `--decode`, the file is read twice so memory stays constant. Pass 1 passes
+  `decode_view::SummaryCollector` to `capture` as a `PacketSink`; it decodes each packet and keeps
+  only the running `DecodeSummary` and the widest endpoint text. Pass 2 decodes the same packets
+  again and writes each row, tree or JSON element as soon as it is decoded, so the summaries can
+  be printed first without keeping any packet.
 
 ### Infrastructure
 
@@ -112,7 +125,6 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `decoder` | 3 | Application metadata (DNS, DHCP, HTTP, TLS handshake); core protocols are done |
 | `flow-engine` | 4 | Bidirectional flow tracking with bounded memory and idle expiry |
 | `storage` | 5 | SQLx/PostgreSQL persistence with migrations and retention |
 | `filter-language` | 6 | Display-filter lexer, parser, validator and parameterized SQL translation |

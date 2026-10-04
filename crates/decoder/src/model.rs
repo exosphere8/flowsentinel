@@ -8,6 +8,11 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 
 use serde::{Serialize, Serializer};
 
+use crate::app::dhcp::DhcpMessage;
+use crate::app::dns::DnsMessage;
+use crate::app::http::HttpMessage;
+use crate::app::tls::TlsHandshake;
+
 /// Protocols this crate recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -20,6 +25,10 @@ pub enum Protocol {
     Icmpv6,
     Tcp,
     Udp,
+    Dns,
+    Dhcp,
+    Http,
+    Tls,
 }
 
 impl Protocol {
@@ -34,6 +43,10 @@ impl Protocol {
             Self::Icmpv6 => "ICMPv6",
             Self::Tcp => "TCP",
             Self::Udp => "UDP",
+            Self::Dns => "DNS",
+            Self::Dhcp => "DHCP",
+            Self::Http => "HTTP",
+            Self::Tls => "TLS",
         }
     }
 }
@@ -124,11 +137,24 @@ pub enum DecodeWarningCode {
     EncryptedPayload,
     /// The IPv4 header checksum does not match.
     BadIpv4Checksum,
+    /// A payload on a port associated with an application protocol is not a
+    /// valid message of that protocol. It is left undecoded.
+    UnrecognizedApplicationData,
+    /// A recognized application message is structurally invalid.
+    MalformedApplicationData,
+    /// An application message continues beyond this packet (TCP
+    /// segmentation); only the visible part was decoded.
+    IncompleteApplicationData,
+    /// An application inspection limit was reached; the rest was skipped.
+    ApplicationLimitReached,
+    /// Credentials, cookies, tokens or query strings were present and were
+    /// removed from the output.
+    SensitiveDataRedacted,
 }
 
 impl DecodeWarningCode {
     /// Every code, for exhaustive tests.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 17] = [
         Self::UnsupportedLinkType,
         Self::UnsupportedEthertype,
         Self::UnsupportedIpProtocol,
@@ -141,6 +167,11 @@ impl DecodeWarningCode {
         Self::ExtensionHeaderLimit,
         Self::EncryptedPayload,
         Self::BadIpv4Checksum,
+        Self::UnrecognizedApplicationData,
+        Self::MalformedApplicationData,
+        Self::IncompleteApplicationData,
+        Self::ApplicationLimitReached,
+        Self::SensitiveDataRedacted,
     ];
 
     /// Stable snake_case identifier; identical to the serialized form.
@@ -158,6 +189,11 @@ impl DecodeWarningCode {
             Self::ExtensionHeaderLimit => "extension_header_limit",
             Self::EncryptedPayload => "encrypted_payload",
             Self::BadIpv4Checksum => "bad_ipv4_checksum",
+            Self::UnrecognizedApplicationData => "unrecognized_application_data",
+            Self::MalformedApplicationData => "malformed_application_data",
+            Self::IncompleteApplicationData => "incomplete_application_data",
+            Self::ApplicationLimitReached => "application_limit_reached",
+            Self::SensitiveDataRedacted => "sensitive_data_redacted",
         }
     }
 }
@@ -383,6 +419,10 @@ pub enum Layer {
     Icmpv6(IcmpHeader),
     Tcp(TcpHeader),
     Udp(UdpHeader),
+    Dns(Box<DnsMessage>),
+    Dhcp(Box<DhcpMessage>),
+    Http(Box<HttpMessage>),
+    Tls(Box<TlsHandshake>),
 }
 
 impl Layer {
@@ -396,6 +436,10 @@ impl Layer {
             Self::Icmpv6(_) => Protocol::Icmpv6,
             Self::Tcp(_) => Protocol::Tcp,
             Self::Udp(_) => Protocol::Udp,
+            Self::Dns(_) => Protocol::Dns,
+            Self::Dhcp(_) => Protocol::Dhcp,
+            Self::Http(_) => Protocol::Http,
+            Self::Tls(_) => Protocol::Tls,
         }
     }
 }

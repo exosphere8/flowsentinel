@@ -30,7 +30,7 @@ fn codes(packet: &DecodedPacket) -> Vec<DecodeWarningCode> {
 }
 
 fn udp_frame() -> Vec<u8> {
-    ethernet(0x0800, &ipv4(&Ipv4::default(), &udp(40000, 53, MARKER)))
+    ethernet(0x0800, &ipv4(&Ipv4::default(), &udp(40000, 9, MARKER)))
 }
 
 #[test]
@@ -72,7 +72,7 @@ fn ethernet_ipv4_udp() {
     let Layer::Udp(u) = &packet.layers[2] else {
         panic!()
     };
-    assert_eq!((u.source_port, u.destination_port), (40000, 53));
+    assert_eq!((u.source_port, u.destination_port), (40000, 9));
     assert_eq!(u.length, 8 + MARKER.len() as u16);
     assert_eq!(u.payload_length, MARKER.len() as u16);
 
@@ -81,7 +81,7 @@ fn ethernet_ipv4_udp() {
         packet.endpoints(),
         Some(("192.0.2.10".into(), "198.51.100.20".into()))
     );
-    assert_eq!(packet.info(), format!("40000 -> 53 len={}", MARKER.len()));
+    assert_eq!(packet.info(), format!("40000 -> 9 len={}", MARKER.len()));
 }
 
 #[test]
@@ -237,7 +237,7 @@ fn arp_with_wrong_address_lengths_is_malformed() {
 
 #[test]
 fn ipv6_tcp_udp_and_icmpv6() {
-    let packet = decode(&ethernet(0x86DD, &ipv6(17, &udp(5353, 5353, MARKER))));
+    let packet = decode(&ethernet(0x86DD, &ipv6(17, &udp(40005, 9, MARKER))));
     assert_eq!(packet.status, DecodeStatus::Complete);
     assert_eq!(
         protocols(&packet),
@@ -704,7 +704,7 @@ fn json_shape_is_tagged_by_protocol() {
     assert_eq!(value["layers"][1]["protocol"], 17);
     assert_eq!(value["layers"][1]["source"], "192.0.2.10");
     assert_eq!(value["layers"][2]["layer"], "udp");
-    assert_eq!(value["layers"][2]["destination_port"], 53);
+    assert_eq!(value["layers"][2]["destination_port"], 9);
     assert_eq!(value["warnings"], serde_json::json!([]));
 }
 

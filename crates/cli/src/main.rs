@@ -27,7 +27,8 @@ enum Command {
     ///
     /// Reads the PCAP global header and per-record headers. With --decode,
     /// also decodes Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP and UDP
-    /// headers. Packet contents are never printed.
+    /// headers, plus DNS, DHCP, HTTP/1.x and visible TLS handshake metadata.
+    /// Packet contents are never printed; credentials are redacted.
     ///
     /// Exit codes: 0 success (including partial results at a limit),
     /// 2 usage error, 3 rejected input, 4 malformed capture, 5 I/O error.
@@ -69,7 +70,9 @@ struct InspectArgs {
     max_duration_seconds: u64,
 
     /// Decode protocol headers (Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP,
-    /// UDP) into metadata. Payloads are measured, never shown.
+    /// UDP) and application metadata (DNS, DHCP, HTTP/1.x, TLS handshakes).
+    /// Payloads are measured, never shown. The file is read twice so memory
+    /// stays constant; --max-duration-seconds limits the first pass.
     #[arg(long)]
     decode: bool,
 

@@ -35,7 +35,7 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 2)
+## Current security posture (Milestone 3)
 
 - The API binds to `127.0.0.1` by default and has **no authentication yet**. Do not expose it to
   a network. The server logs a warning if configured to listen on a non-loopback address.
@@ -59,6 +59,16 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   fixed limits, and a malformed packet yields a status and warning instead of an error. Property
   tests and cargo-fuzz targets (`fuzz/`) exercise the parsers with arbitrary input. Details:
   [docs/protocol-decoding.md](docs/protocol-decoding.md).
+- Application metadata (DNS, DHCP, HTTP/1.x, TLS handshakes) is extracted field by field with
+  fixed size limits; nothing is copied wholesale. HTTP bodies, query strings, URL credentials,
+  cookies and authorization/token headers are never read into output; their presence is reported
+  as a redaction. DHCP option values other than five documented ones are never exposed. TLS is
+  never decrypted, and randoms, session IDs, key shares, PSK identities, tickets and certificates
+  are skipped. DNS compression pointers are loop-protected and decoded text is budgeted per
+  message. HTTP request targets other than plain paths or `http(s)://host` URLs are withheld, and
+  token-like path segments are masked (a heuristic). Fixtures embed secret marker strings, and
+  tests assert they never appear in any output, in any letter case. Details:
+  [docs/application-metadata.md](docs/application-metadata.md).
 
 Later milestones add authentication and RBAC (9), audit logging (9), upload hardening (5, 11),
 and dependency auditing, secret scanning and static analysis in CI (11).

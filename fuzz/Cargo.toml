@@ -25,6 +25,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "application"
+path = "fuzz_targets/application.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "pcap_reader"
 path = "fuzz_targets/pcap_reader.rs"
 test = false

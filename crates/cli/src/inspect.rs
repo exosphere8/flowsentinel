@@ -10,43 +10,51 @@ use capture::{
 use serde::Serialize;
 
 use crate::InspectArgs;
-use crate::decode_view::{self, DecodeCollector, Decoded};
+use crate::decode_view::{self, StreamOutcome, Style, SummaryCollector};
 use crate::exit;
 
 pub fn run(args: &InspectArgs) -> ExitCode {
-    let mut collector = args.decode.then(DecodeCollector::default);
+    let mut collector = args.decode.then(SummaryCollector::default);
     let result = inspect_file_with_sink(
         &args.pcap,
         &args.limits(),
         &MonotonicClock::start(),
         collector.as_mut().map(|c| c as &mut dyn PacketSink),
     );
-    let decoded = collector.map(|c| c.decoded);
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
 
+    let consistent = |()| StreamOutcome::Consistent;
     let (written, code) = match &result {
         Ok(report) => {
-            let written = match (&decoded, args.json) {
-                (Some(decoded), true) => decode_view::write_json(&mut out, report, decoded),
-                (None, true) => write_json(&mut out, report),
-                (decoded, false) => write_human(&mut out, report, decoded.as_ref(), args.verbose),
+            let written = match (&collector, args.json) {
+                (Some(c), true) => decode_view::write_json(&mut out, args, report, c),
+                (None, true) => write_json(&mut out, report).map(consistent),
+                (Some(c), false) => write_decoded_human(&mut out, args, report, c),
+                (None, false) => write_human(&mut out, report).map(consistent),
             };
             (written, ExitCode::SUCCESS)
         }
         Err(err) => {
             let code = exit::for_category(err.category());
             if args.json {
-                (write_json_error(&mut out, err), code)
+                (write_json_error(&mut out, err).map(consistent), code)
             } else {
                 report_to_stderr(&format!("error: {err}"));
-                (Ok(()), code)
+                (Ok(StreamOutcome::Consistent), code)
             }
         }
     };
 
-    match written.and_then(|()| out.flush()) {
-        Ok(()) => code,
+    match written.and_then(|outcome| out.flush().map(|()| outcome)) {
+        Ok(StreamOutcome::Consistent) => code,
+        // JSON output already carries the error.
+        Ok(StreamOutcome::Changed) => {
+            if !args.json {
+                report_to_stderr(&format!("error: {}", decode_view::CHANGED_MESSAGE));
+            }
+            ExitCode::from(exit::IO)
+        }
         // The reader went away (for example `| head`); nothing left to say.
         Err(err) if err.kind() == io::ErrorKind::BrokenPipe => code,
         Err(err) => {
@@ -96,12 +104,33 @@ fn timestamp_or_dash(ts: Option<Timestamp>) -> String {
     ts.map_or_else(|| "-".to_owned(), |ts| ts.to_rfc3339())
 }
 
-fn write_human(
+fn write_decoded_human(
     out: &mut impl Write,
+    args: &InspectArgs,
     report: &CaptureReport,
-    decoded: Option<&Decoded>,
-    verbose: bool,
-) -> io::Result<()> {
+    collector: &SummaryCollector,
+) -> io::Result<StreamOutcome> {
+    write_capture_summary(out, report)?;
+    writeln!(out)?;
+    decode_view::write_summary(out, &collector.summary)?;
+    writeln!(out)?;
+    let width = decode_view::column_width(collector.endpoint_width);
+    decode_view::write_table_header(out, report, width)?;
+    let style = Style::Table {
+        verbose: args.verbose,
+        width,
+    };
+    decode_view::stream_packets(out, args, report, collector, style)
+}
+
+fn write_human(out: &mut impl Write, report: &CaptureReport) -> io::Result<()> {
+    write_capture_summary(out, report)?;
+    writeln!(out)?;
+    write_packet_table(out, report)
+}
+
+/// Capture summary and capture warnings.
+fn write_capture_summary(out: &mut impl Write, report: &CaptureReport) -> io::Result<()> {
     let s = &report.summary;
     let h = &s.header;
     let link_name = h.link_type_name.unwrap_or("unknown");
@@ -185,12 +214,10 @@ fn write_human(
         }
     }
 
-    writeln!(out)?;
-    if let Some(decoded) = decoded {
-        decode_view::write_summary(out, &decoded.summary)?;
-        writeln!(out)?;
-        return decode_view::write_packets(out, report, decoded, verbose);
-    }
+    Ok(())
+}
+
+fn write_packet_table(out: &mut impl Write, report: &CaptureReport) -> io::Result<()> {
     writeln!(out, "Packets")?;
     if report.packets.is_empty() {
         writeln!(out, "  none")?;
@@ -253,7 +280,7 @@ mod tests {
 
     fn human(report: &CaptureReport) -> String {
         let mut out = Vec::new();
-        write_human(&mut out, report, None, false).unwrap();
+        write_human(&mut out, report).unwrap();
         String::from_utf8(out).unwrap()
     }
 

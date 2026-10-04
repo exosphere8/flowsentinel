@@ -8,7 +8,8 @@
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local setup, workflow, quality gates |
 | [pcap-ingestion.md](pcap-ingestion.md) | `flowsentinel inspect`: supported input, limits, output, errors |
 | [protocol-decoding.md](protocol-decoding.md) | `inspect --decode`: protocols, statuses, warnings, validation rules |
+| [application-metadata.md](application-metadata.md) | DNS, DHCP, HTTP and TLS handshake metadata: recognition, fields, limits, redaction |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 
 Each later milestone adds its own document here, for example
-`application-metadata.md` and `flow-engine.md`.
+`flow-engine.md` and `api.md`.

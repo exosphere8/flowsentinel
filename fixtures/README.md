@@ -58,3 +58,18 @@ application-protocol decoders leave them alone. Packets are 10 ms apart.
 | `decode-unsupported.pcap` | LLDP, 802.3/LLC, GRE, three VLAN tags, valid UDP | 4 x `unsupported`, then `complete` |
 | `decode-malformed.pcap` | One broken header or lying length per packet (two cut by the snapshot length), then a valid UDP packet | `truncated`/`malformed`, last packet `complete` |
 | `decode-raw-linktype.pcap` | `LINKTYPE_RAW` (101) | 2 x `unsupported` (link type) |
+
+### Application fixtures
+
+These exercise DNS, DHCP, HTTP and TLS metadata. Names use the reserved `example.com`,
+`example.org`, `.example` and `.local` domains. Every credential-like value (HTTP authorization,
+cookies, query strings, URL credentials, form passwords, a DNS TXT record, the TLS random,
+session ID and key share) contains `FLOWSENTINEL-SECRET`, and tests assert that it never appears
+in output.
+
+| File | Contents |
+| --- | --- |
+| `app-dns.pcap` | Queries/responses with compression, NXDOMAIN, MX, TXT, mDNS, a compression loop, DNS over TCP, non-DNS on port 53, a snapshot-cut response |
+| `app-dhcp.pcap` | DISCOVER, OFFER, REQUEST, ACK, then non-DHCP bytes |
+| `app-http.pcap` | Requests and a response with credentials to redact, HEAD on port 8080, non-HTTP on port 80, a URL with credentials embedded in a path |
+| `app-tls.pcap` | ClientHello, ServerHello, Certificate and application-data records, ClientHello on port 8443 |
