@@ -499,14 +499,33 @@ impl Storage {
     /// Starts a session for `token_sha256` lasting at most `lifetime`, and
     /// ends the account's oldest sessions beyond `max_per_user`. Returns the
     /// expiry time (RFC 3339 UTC).
+    ///
+    /// `password_hash` is the hash the caller verified the password against.
+    /// If the account's password changed (or the account was disabled) in the
+    /// meantime, no session is started and `None` is returned: a password
+    /// change ends every session, including ones whose sign-in was still
+    /// being checked.
     pub async fn create_auth_session(
         &self,
         user_id: i64,
         token_sha256: &[u8; 32],
         lifetime: Duration,
         max_per_user: u32,
-    ) -> Result<String, StorageError> {
+        password_hash: &str,
+    ) -> Result<Option<String>, StorageError> {
         let mut tx = self.pool().begin().await?;
+        // Waits for a concurrent password change to commit, then re-checks.
+        let current: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM users WHERE id = $1 AND password_hash = $2 AND NOT disabled \
+             FOR SHARE",
+        )
+        .bind(user_id)
+        .bind(password_hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if current.is_none() {
+            return Ok(None);
+        }
         let expires_at: String = sqlx::query_scalar(
             "INSERT INTO auth_sessions (token_sha256, user_id, expires_at) \
              VALUES ($1, $2, now() + make_interval(secs => $3)) \
@@ -531,7 +550,7 @@ impl Storage {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
-        Ok(expires_at)
+        Ok(Some(expires_at))
     }
 
     /// The account behind a session token, if the session has neither

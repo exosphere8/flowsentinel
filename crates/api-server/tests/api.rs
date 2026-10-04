@@ -34,8 +34,15 @@ const UNUSED_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$dW51c2VkLXNhbHQ$dW51c2
 async fn session_for(storage: &storage::Storage, user_id: i64) -> SessionToken {
     let token = SessionToken::generate().unwrap();
     storage
-        .create_auth_session(user_id, &token.digest(), Duration::from_secs(3600), 10)
+        .create_auth_session(
+            user_id,
+            &token.digest(),
+            Duration::from_secs(3600),
+            10,
+            UNUSED_HASH,
+        )
         .await
+        .unwrap()
         .unwrap();
     token
 }

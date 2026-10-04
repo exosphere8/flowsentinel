@@ -167,10 +167,13 @@ async fn start_session(
     user_id: i64,
     username: &str,
     role: Role,
+    password_hash: &str,
     status: StatusCode,
 ) -> Result<Response, ApiError> {
     let auth = state.config.auth;
     let token = SessionToken::generate()?;
+    // `None`: the password changed (or the account was disabled) while it
+    // was being checked.
     let expires_at = state
         .storage
         .create_auth_session(
@@ -178,8 +181,10 @@ async fn start_session(
             &token.digest(),
             auth.session_lifetime,
             MAX_SESSIONS_PER_USER,
+            password_hash,
         )
-        .await?;
+        .await?
+        .ok_or_else(invalid_credentials)?;
     let info = SessionInfo {
         user: SessionAccount {
             id: user_id,
@@ -265,9 +270,15 @@ pub async fn login(
         client_ip,
         details: json!({ "reason": reason }),
     };
-    if let Err(retry_after) = state.login_limiter.check(&name, client_ip, Instant::now()) {
-        audit::record(&state, failed("rate_limited")).await;
-        return Ok(too_many_attempts(retry_after));
+    // Reserved before checking the password, so parallel guesses count.
+    let attempted_at = Instant::now();
+    if let Err(locked) = state.login_limiter.attempt(&name, client_ip, attempted_at) {
+        // Audited once per lockout; repeated refusals cost no hashing and
+        // would only fill the log.
+        if locked.first {
+            audit::record(&state, failed("rate_limited")).await;
+        }
+        return Ok(too_many_attempts(locked.retry_after));
     }
 
     let _hashing = auth::hash_slot(&state).await?;
@@ -291,9 +302,6 @@ pub async fn login(
     let account = match credentials {
         Some(account) if matches && !account.disabled => account,
         other => {
-            state
-                .login_limiter
-                .failure(&name, client_ip, Instant::now());
             let reason = match other {
                 None => "unknown_user",
                 Some(_) if !matches => "wrong_password",
@@ -303,15 +311,18 @@ pub async fn login(
             return Err(invalid_credentials());
         }
     };
-    state.login_limiter.success(&account.username);
     let response = start_session(
         &state,
         account.id,
         &account.username,
         account.role,
+        &account.password_hash,
         StatusCode::OK,
     )
     .await?;
+    state
+        .login_limiter
+        .succeeded(&name, client_ip, attempted_at);
     audit::record(
         &state,
         NewAuditEvent {
@@ -406,18 +417,21 @@ pub async fn change_password(
         details,
         ..audit::by(&user, "auth.password_change")
     };
-    if let Err(retry_after) = state
-        .login_limiter
-        .check(&user.username, client_ip, Instant::now())
-    {
-        audit::record(
-            &state,
-            event(AuditOutcome::Failure, json!({ "reason": "rate_limited" })),
-        )
-        .await;
-        return Ok(too_many_attempts(retry_after));
-    }
     auth::check_new_password(&change.new_password, &user.username)?;
+    let attempted_at = Instant::now();
+    if let Err(locked) = state
+        .login_limiter
+        .attempt(&user.username, client_ip, attempted_at)
+    {
+        if locked.first {
+            audit::record(
+                &state,
+                event(AuditOutcome::Failure, json!({ "reason": "rate_limited" })),
+            )
+            .await;
+        }
+        return Ok(too_many_attempts(locked.retry_after));
+    }
     let _hashing = auth::hash_slot(&state).await?;
     let stored = state
         .storage
@@ -436,9 +450,6 @@ pub async fn change_password(
     .await?
     .map_err(|e| ApiError::internal("password hashing", &e))?;
     let Some(hash) = hashed else {
-        state
-            .login_limiter
-            .failure(&user.username, client_ip, Instant::now());
         audit::record(
             &state,
             event(AuditOutcome::Failure, json!({ "reason": "wrong_password" })),
@@ -452,11 +463,15 @@ pub async fn change_password(
     if !state.storage.change_password(user.user_id, &hash).await? {
         return Err(auth::unauthenticated());
     }
+    state
+        .login_limiter
+        .succeeded(&user.username, client_ip, attempted_at);
     let response = start_session(
         &state,
         user.user_id,
         &user.username,
         user.role,
+        &hash,
         StatusCode::OK,
     )
     .await?;

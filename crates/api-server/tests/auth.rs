@@ -341,11 +341,88 @@ async fn repeated_failures_lock_the_account_name() {
     // Other accounts are unaffected.
     h.add_user("bob", Role::Viewer).await;
     assert_eq!(h.login("bob", PASSWORD).await.status, StatusCode::OK);
+    // Further refusals during the lock are not audited one by one.
+    for _ in 0..10 {
+        assert_eq!(
+            h.login("ana", PASSWORD).await.status,
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
     let limited = h.audit("auth.login").await;
+    let refusals = limited
+        .iter()
+        .filter(|e| e["details"]["reason"] == "rate_limited")
+        .count();
+    assert_eq!(refusals, 1);
+    h.db.drop_database().await;
+}
+
+#[tokio::test]
+async fn parallel_guesses_are_limited_too() {
+    let Some(h) = Harness::new("auth_burst").await else {
+        return;
+    };
+    h.add_user("admin", Role::Admin).await;
+    let h = std::sync::Arc::new(h);
+    let guesses = (0..40).map(|i| {
+        let h = std::sync::Arc::clone(&h);
+        tokio::spawn(async move {
+            h.login("admin", &format!("wrong guess number {i}"))
+                .await
+                .status
+        })
+    });
+    let statuses = futures_util::future::join_all(guesses).await;
+    let checked = statuses
+        .iter()
+        .filter(|s| *s.as_ref().unwrap() == StatusCode::UNAUTHORIZED)
+        .count();
+    let refused = statuses
+        .iter()
+        .filter(|s| *s.as_ref().unwrap() == StatusCode::TOO_MANY_REQUESTS)
+        .count();
+    assert_eq!((checked, refused), (5, 35));
+    let Ok(h) = std::sync::Arc::try_unwrap(h) else {
+        panic!("harness still shared");
+    };
+    h.db.drop_database().await;
+}
+
+#[tokio::test]
+async fn a_sign_in_checked_against_an_old_password_starts_no_session() {
+    let Some(h) = Harness::new("auth_stale").await else {
+        return;
+    };
+    let id = h.add_user("ana", Role::Analyst).await;
+    let storage = &h.db.storage;
+    let old = storage.password_hash(id).await.unwrap().unwrap();
+    let token = api_server::auth::SessionToken::generate().unwrap();
+    let hour = std::time::Duration::from_secs(3600);
+    // The password changes while a sign-in with the old one is being checked.
+    let new = api_server::auth::hash_password("a different passphrase").unwrap();
+    assert!(storage.change_password(id, &new).await.unwrap());
+    let stale = storage
+        .create_auth_session(id, &token.digest(), hour, 10, &old)
+        .await
+        .unwrap();
+    assert_eq!(stale, None);
     assert!(
-        limited
-            .iter()
-            .any(|e| e["details"]["reason"] == "rate_limited")
+        storage
+            .create_auth_session(id, &token.digest(), hour, 10, &new)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    // Nor for a disabled account.
+    h.sql(&format!("UPDATE users SET disabled = TRUE WHERE id = {id}"))
+        .await;
+    let other = api_server::auth::SessionToken::generate().unwrap();
+    assert_eq!(
+        storage
+            .create_auth_session(id, &other.digest(), hour, 10, &new)
+            .await
+            .unwrap(),
+        None
     );
     h.db.drop_database().await;
 }

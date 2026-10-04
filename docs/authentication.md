@@ -17,8 +17,8 @@ printf '%s\n' 'a long passphrase of your own' > admin-password   # keep it priva
 FLOWSENTINEL_ADMIN_PASSWORD_FILE=admin-password FLOWSENTINEL_ADMIN_USERNAME=admin make dev
 ```
 
-- The file is used only while the database has no accounts. Once one exists, the file is ignored
-  and can be deleted.
+- The file is used only while the database has no accounts. Once one exists, the file is not
+  read at all and can be deleted.
 - One trailing line ending is removed. The password must meet the [password rules](#passwords).
 - If the file cannot be read or the password is too weak, the server refuses to start.
 
@@ -82,7 +82,8 @@ The session token:
 
 A session ends:
 
-- after `FLOWSENTINEL_SESSION_IDLE_MINUTES` (default 30) without a request;
+- after `FLOWSENTINEL_SESSION_IDLE_MINUTES` (default 30) without a request (use is recorded at
+  most once a minute, so a session may end up to a minute sooner);
 - `FLOWSENTINEL_SESSION_MAX_HOURS` (default 12) after sign-in, however active it is;
 - on sign-out (`POST /api/v1/auth/logout`);
 - when the account's role, enabled state or password changes. All of the account's sessions end.
@@ -157,12 +158,15 @@ or digit. They are stored lowercase, and sign-in ignores case.
 
 ## Sign-in limits
 
-Failed password checks are counted in memory per username and per client address:
+Password checks are counted in memory per username and per client address. Each check is
+reserved before the password is verified, so requests sent in parallel cannot slip past the
+limit; a check whose password was right is given back, so successful sign-ins never lock an
+address.
 
 | Key | Limit | Lockout |
 | --- | --- | --- |
-| Username | 5 failures in 15 minutes | Until the oldest of them is 15 minutes old |
-| Client address | 20 failures in 15 minutes | Likewise |
+| Username | 5 failed checks in 15 minutes | Until the oldest of them is 15 minutes old |
+| Client address | 20 failed checks in 15 minutes | Likewise |
 
 - While locked, sign-in (even with the right password) and password changes get
   `429 too_many_attempts` with a `Retry-After` header in seconds.
@@ -196,7 +200,7 @@ request is not undone.
 
 | Action | Recorded when | Details |
 | --- | --- | --- |
-| `auth.login` | Every sign-in attempt | `role` on success; `reason` on failure: `wrong_password`, `unknown_user`, `account_disabled`, `rate_limited` |
+| `auth.login` | Every sign-in attempt; while locked, only the first refusal | `role` on success; `reason` on failure: `wrong_password`, `unknown_user`, `account_disabled`, `rate_limited` |
 | `auth.logout` | Sign-out | |
 | `auth.password_change` | A user changes their own password | `reason` on failure |
 | `access.denied` | A request refused for its role, or for a missing or wrong CSRF token | `reason`, `method`, `path`, `role`, `required` |
@@ -214,7 +218,8 @@ What the audit log never holds:
 - request bodies or packet data.
 
 Requests refused for having no session are not audited: they carry no account, and recording
-them would let anyone fill the log. Admins read the log on the dashboard's **Audit log** page or
+them would let anyone fill the log. For the same reason a locked-out username or address records
+only its first refused attempt per lockout. Admins read the log on the dashboard's **Audit log** page or
 with `GET /api/v1/audit` (filters: `action`, `outcome`, `actor`; newest first).
 
 How long events are kept:

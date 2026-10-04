@@ -1,12 +1,18 @@
-//! Limits on failed password checks, per account name and per client
-//! address, kept in memory.
+//! Limits on password checks, per account name and per client address, kept
+//! in memory.
 //!
-//! An account name with [`MAX_FAILURES_PER_NAME`] failures in the last
+//! Every password check first reserves an attempt with [`LoginLimiter::attempt`],
+//! which checks the limits and records the attempt in one step, so requests
+//! running in parallel cannot all pass the check before any of them has
+//! failed. A successful check gives the attempt back
+//! ([`LoginLimiter::succeeded`]); a failed one keeps it.
+//!
+//! An account name with [`MAX_FAILURES_PER_NAME`] attempts kept in the last
 //! [`WINDOW`] is locked until the oldest of them is older than the window;
-//! a client address with [`MAX_FAILURES_PER_ADDRESS`] failures likewise.
-//! The table holds at most [`MAX_KEYS`] names and addresses; when it is full,
-//! keys whose failures have all expired go first, then the least recently
-//! failed. Limits reset when the server restarts.
+//! a client address with [`MAX_FAILURES_PER_ADDRESS`] likewise. The table
+//! holds at most [`MAX_KEYS`] names and addresses; when it is full, keys
+//! whose attempts have all expired go first, then the least recently used.
+//! Limits reset when the server restarts.
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
@@ -33,10 +39,27 @@ impl Key {
     }
 }
 
-/// Recent failure times per key, oldest first.
+#[derive(Debug, Default)]
+struct Entry {
+    /// Attempts kept, oldest first.
+    times: VecDeque<Instant>,
+    /// A refusal during the current lock has already been reported.
+    refusal_reported: bool,
+}
+
+/// A refused attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Locked {
+    pub retry_after: Duration,
+    /// The first refusal since this lock began; later ones are not worth
+    /// auditing one by one.
+    pub first: bool,
+}
+
+/// Recent attempts per key.
 #[derive(Debug, Default)]
 pub struct LoginLimiter {
-    failures: Mutex<HashMap<Key, VecDeque<Instant>>>,
+    entries: Mutex<HashMap<Key, Entry>>,
 }
 
 fn keys(name: &str, address: Option<IpAddr>) -> impl Iterator<Item = Key> {
@@ -57,59 +80,66 @@ impl LoginLimiter {
         Self::default()
     }
 
-    /// `Err(retry_after)` when the name or the address is locked at `now`.
-    pub fn check(&self, name: &str, address: Option<IpAddr>, now: Instant) -> Result<(), Duration> {
-        let mut failures = self.failures.lock().unwrap_or_else(PoisonError::into_inner);
+    /// Reserves a password check for `name` from `address` at `now`, or
+    /// refuses it while either is locked.
+    pub fn attempt(&self, name: &str, address: Option<IpAddr>, now: Instant) -> Result<(), Locked> {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
         let mut wait = Duration::ZERO;
+        let mut first = false;
         for key in keys(name, address) {
             let limit = key.limit();
-            if let Some(times) = failures.get_mut(&key) {
-                expire(times, now);
-                if times.len() >= limit {
-                    // Unlocked once enough of the failures leave the window.
-                    let unlock = times
-                        .get(times.len() - limit)
+            if let Some(entry) = entries.get_mut(&key) {
+                expire(&mut entry.times, now);
+                if entry.times.len() >= limit {
+                    // Unlocked once enough attempts leave the window.
+                    let unlock = entry
+                        .times
+                        .get(entry.times.len() - limit)
                         .map(|&t| WINDOW.saturating_sub(now.saturating_duration_since(t)))
                         .unwrap_or(WINDOW);
                     wait = wait.max(unlock);
+                    first |= !entry.refusal_reported;
+                    entry.refusal_reported = true;
                 }
             }
         }
-        if wait.is_zero() {
-            Ok(())
-        } else {
-            Err(wait.max(Duration::from_secs(1)))
+        if !wait.is_zero() {
+            return Err(Locked {
+                retry_after: wait.max(Duration::from_secs(1)),
+                first,
+            });
         }
-    }
-
-    /// Records a failed password check.
-    pub fn failure(&self, name: &str, address: Option<IpAddr>, now: Instant) {
-        let mut failures = self.failures.lock().unwrap_or_else(PoisonError::into_inner);
         for key in keys(name, address) {
-            if !failures.contains_key(&key) && failures.len() >= MAX_KEYS {
-                make_room(&mut failures, now);
+            if !entries.contains_key(&key) && entries.len() >= MAX_KEYS {
+                make_room(&mut entries, now);
             }
             let limit = key.limit();
-            let times = failures.entry(key).or_default();
-            expire(times, now);
-            times.push_back(now);
-            // Older failures no longer change the outcome.
-            while times.len() > limit {
-                times.pop_front();
+            let entry = entries.entry(key).or_default();
+            entry.refusal_reported = false;
+            entry.times.push_back(now);
+            // Older attempts no longer change the outcome.
+            while entry.times.len() > limit {
+                entry.times.pop_front();
             }
         }
+        Ok(())
     }
 
-    /// Clears an account name's failures after a successful sign-in. The
-    /// address keeps its count.
-    pub fn success(&self, name: &str) {
-        let mut failures = self.failures.lock().unwrap_or_else(PoisonError::into_inner);
-        failures.remove(&Key::Name(name.to_owned()));
+    /// Gives back an attempt made at `at` whose password was right: the
+    /// name's attempts are cleared, and the address's attempt is removed.
+    pub fn succeeded(&self, name: &str, address: Option<IpAddr>, at: Instant) {
+        let mut entries = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
+        entries.remove(&Key::Name(name.to_owned()));
+        if let Some(entry) = address.and_then(|a| entries.get_mut(&Key::Address(a))) {
+            if let Some(position) = entry.times.iter().position(|&t| t == at) {
+                entry.times.remove(position);
+            }
+        }
     }
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.failures
+        self.entries
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .len()
@@ -117,21 +147,21 @@ impl LoginLimiter {
 }
 
 /// Frees at least one slot: drops expired keys, or else the key whose last
-/// failure is oldest.
-fn make_room(failures: &mut HashMap<Key, VecDeque<Instant>>, now: Instant) {
-    failures.retain(|_, times| {
-        expire(times, now);
-        !times.is_empty()
+/// attempt is oldest.
+fn make_room(entries: &mut HashMap<Key, Entry>, now: Instant) {
+    entries.retain(|_, entry| {
+        expire(&mut entry.times, now);
+        !entry.times.is_empty()
     });
-    if failures.len() < MAX_KEYS {
+    if entries.len() < MAX_KEYS {
         return;
     }
-    let oldest = failures
+    let oldest = entries
         .iter()
-        .min_by_key(|(_, times)| times.back().copied())
+        .min_by_key(|(_, entry)| entry.times.back().copied())
         .map(|(key, _)| key.clone());
     if let Some(key) = oldest {
-        failures.remove(&key);
+        entries.remove(&key);
     }
 }
 
@@ -142,36 +172,71 @@ mod tests {
     const ADDR: Option<IpAddr> = Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 0, 2, 9)));
 
     #[test]
-    fn names_lock_after_five_failures_until_the_window_passes() {
+    fn names_lock_after_five_attempts_until_the_window_passes() {
         let limiter = LoginLimiter::new();
         let start = Instant::now();
         for i in 0..MAX_FAILURES_PER_NAME {
-            assert!(limiter.check("ana", ADDR, start).is_ok(), "attempt {i}");
-            limiter.failure("ana", ADDR, start + Duration::from_secs(i as u64));
+            assert!(
+                limiter
+                    .attempt("ana", ADDR, start + Duration::from_secs(i as u64))
+                    .is_ok(),
+                "attempt {i}"
+            );
         }
-        let locked = limiter.check("ana", None, start + Duration::from_secs(10));
-        // The first failure (at +0 s) leaves the window at +15 min.
-        assert_eq!(locked, Err(WINDOW - Duration::from_secs(10)));
+        let locked = limiter
+            .attempt("ana", None, start + Duration::from_secs(10))
+            .unwrap_err();
+        // The first attempt (at +0 s) leaves the window at +15 min.
+        assert_eq!(locked.retry_after, WINDOW - Duration::from_secs(10));
+        assert!(locked.first);
+        // Further refusals during the same lock are not "first".
+        let again = limiter.attempt("ana", None, start + Duration::from_secs(11));
+        assert!(!again.unwrap_err().first);
         // Other names are unaffected.
-        assert!(limiter.check("bob", None, start).is_ok());
-        assert!(limiter.check("ana", None, start + WINDOW).is_ok());
+        assert!(limiter.attempt("bob", None, start).is_ok());
+        assert!(limiter.attempt("ana", None, start + WINDOW).is_ok());
     }
 
     #[test]
-    fn a_success_clears_the_name_but_not_the_address() {
+    fn parallel_attempts_cannot_pass_together() {
+        let limiter = std::sync::Arc::new(LoginLimiter::new());
+        let now = Instant::now();
+        let passed: usize = (0..64)
+            .map(|_| {
+                let limiter = std::sync::Arc::clone(&limiter);
+                std::thread::spawn(move || limiter.attempt("admin", ADDR, now).is_ok())
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| usize::from(t.join().unwrap()))
+            .sum();
+        assert_eq!(passed, MAX_FAILURES_PER_NAME);
+    }
+
+    #[test]
+    fn a_success_gives_the_attempt_back() {
         let limiter = LoginLimiter::new();
         let now = Instant::now();
-        for _ in 0..MAX_FAILURES_PER_NAME {
-            limiter.failure("ana", ADDR, now);
+        for _ in 0..MAX_FAILURES_PER_NAME - 1 {
+            limiter.attempt("ana", ADDR, now).unwrap();
         }
-        assert!(limiter.check("ana", None, now).is_err());
-        limiter.success("ana");
-        assert!(limiter.check("ana", None, now).is_ok());
+        let at = now + Duration::from_secs(1);
+        limiter.attempt("ana", ADDR, at).unwrap();
+        limiter.succeeded("ana", ADDR, at);
+        assert!(limiter.attempt("ana", None, at).is_ok());
+        // Successful sign-ins never lock an address.
+        for i in 0..(MAX_FAILURES_PER_ADDRESS * 2) {
+            let at = now + Duration::from_millis(10 + i as u64);
+            limiter.attempt(&format!("user{i}"), ADDR, at).unwrap();
+            limiter.succeeded(&format!("user{i}"), ADDR, at);
+        }
+        assert!(limiter.attempt("someone-new", ADDR, now).is_ok());
+        // Failures from one address lock it for every name.
         for i in 0..MAX_FAILURES_PER_ADDRESS {
-            limiter.failure(&format!("user{i}"), ADDR, now);
+            let _ = limiter.attempt(&format!("guess{i}"), ADDR, now);
         }
-        assert!(limiter.check("someone-new", ADDR, now).is_err());
-        assert!(limiter.check("someone-new", None, now).is_ok());
+        assert!(limiter.attempt("another", ADDR, now).is_err());
+        assert!(limiter.attempt("another", None, now).is_ok());
     }
 
     #[test]
@@ -179,7 +244,7 @@ mod tests {
         let limiter = LoginLimiter::new();
         let now = Instant::now();
         for i in 0..(MAX_KEYS + 50) {
-            limiter.failure(
+            let _ = limiter.attempt(
                 &format!("user{i}"),
                 None,
                 now + Duration::from_millis(i as u64),
@@ -187,16 +252,13 @@ mod tests {
         }
         assert_eq!(limiter.len(), MAX_KEYS);
         // The newest keys are kept.
+        let newest = format!("user{}", MAX_KEYS + 49);
         for _ in 1..MAX_FAILURES_PER_NAME {
-            limiter.failure(&format!("user{}", MAX_KEYS + 49), None, now);
+            let _ = limiter.attempt(&newest, None, now);
         }
-        assert!(
-            limiter
-                .check(&format!("user{}", MAX_KEYS + 49), None, now)
-                .is_err()
-        );
+        assert!(limiter.attempt(&newest, None, now).is_err());
         // Expired keys make room before live ones are dropped.
-        limiter.failure("late", None, now + WINDOW + Duration::from_secs(60));
+        let _ = limiter.attempt("late", None, now + WINDOW + Duration::from_secs(60));
         assert_eq!(limiter.len(), 1);
     }
 }

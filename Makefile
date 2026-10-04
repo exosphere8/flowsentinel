@@ -18,7 +18,8 @@ dev: ## Run the API server on 127.0.0.1:8080 with settings from .env
 
 admin: ## Create an admin account (asks for a name and a password)
 	@test -f .env || { echo "copy .env.example to .env and set the passwords first"; exit 1; }
-	@printf 'Username: '; read user; printf 'Password (not shown): '; stty -echo; read pw; stty echo; echo; \
+	@printf 'Username: '; IFS= read -r user; printf 'Password (not shown): '; \
+	  trap 'stty echo' EXIT INT TERM; stty -echo; IFS= read -r pw; stty echo; echo; \
 	  set -a && . ./.env && set +a && \
 	  printf '%s\n' "$$pw" | $(CARGO) run -q -p api-server -- create-user --username "$$user" --role admin
 

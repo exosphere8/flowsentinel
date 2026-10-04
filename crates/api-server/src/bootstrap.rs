@@ -1,7 +1,7 @@
 //! Creating accounts outside the API: the first admin from a password file
 //! at startup, and `flowsentinel-api create-user` on the command line.
 
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::Path;
 
 use serde_json::json;
@@ -33,6 +33,19 @@ pub fn read_password(mut input: impl Read) -> Result<String, String> {
         }
     }
     Ok(text)
+}
+
+/// Reads one line from a terminal: the password ends at Enter.
+pub fn read_password_line(input: impl BufRead) -> Result<String, String> {
+    let mut line = String::new();
+    input
+        .take(MAX_PASSWORD_INPUT + 1)
+        .read_line(&mut line)
+        .map_err(|e| format!("cannot read the password: {e}"))?;
+    if u64::try_from(line.len()).unwrap_or(u64::MAX) > MAX_PASSWORD_INPUT {
+        return Err("the password input is longer than 1 KiB".to_owned());
+    }
+    read_password(line.as_bytes())
 }
 
 /// Reads a password file (see [`read_password`]).
@@ -133,6 +146,12 @@ mod tests {
         assert!(read_password(&long[..]).unwrap_err().contains("1 KiB"));
         let err = read_password(&[0xff, 0xfe][..]).unwrap_err();
         assert!(err.contains("UTF-8"));
+        // At a terminal the password ends at Enter; later input is not read.
+        assert_eq!(
+            read_password_line(&b"typed passphrase\nnext line\n"[..]).unwrap(),
+            "typed passphrase"
+        );
+        assert!(read_password_line(&[b'a'; 2000][..]).is_err());
     }
 
     #[test]

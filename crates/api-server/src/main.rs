@@ -254,7 +254,12 @@ async fn purge_expired(storage: Storage, auth: AuthConfig) {
 /// Creates the first admin from `FLOWSENTINEL_ADMIN_PASSWORD_FILE` while no
 /// account exists, and warns when there is still no account.
 async fn ensure_accounts(storage: &Storage, config: &Config) -> Result<(), String> {
-    if let Some(path) = &config.admin_password_file {
+    let existing = storage.count_users().await.map_err(|e| e.to_string())?;
+    if let (Some(_), true) = (&config.admin_password_file, existing > 0) {
+        tracing::info!(
+            "accounts exist; FLOWSENTINEL_ADMIN_PASSWORD_FILE is ignored and can be removed"
+        );
+    } else if let Some(path) = &config.admin_password_file {
         let password = bootstrap::read_password_file(path)?;
         match bootstrap::first_admin(storage, &config.admin_username, password).await? {
             Some(user) => tracing::info!(username = %user.username, "first admin account created"),
@@ -305,11 +310,15 @@ async fn run_create_user(args: &[String]) -> ExitCode {
         eprintln!("error: set FLOWSENTINEL_DATABASE_URL");
         return ExitCode::FAILURE;
     };
-    if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+    let typed = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let read = if typed {
         eprintln!("Password (input is visible; prefer piping it in), then Enter:");
-    }
-    let password = match bootstrap::read_password(std::io::stdin().lock()) {
-        // Only the first line counts when typed at a terminal.
+        bootstrap::read_password_line(std::io::stdin().lock())
+    } else {
+        bootstrap::read_password(std::io::stdin().lock())
+    };
+    let password = match read {
+        // Only the first line counts.
         Ok(text) => text.lines().next().unwrap_or_default().to_owned(),
         Err(err) => {
             eprintln!("error: {err}");

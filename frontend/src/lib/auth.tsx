@@ -100,9 +100,24 @@ export function useCan(required: Role): boolean {
   return roleIncludes(useSession()?.user.role, required);
 }
 
-/** Where to go after signing in: only paths on this site. */
+const BASE = 'https://flowsentinel.invalid';
+
+/**
+ * Where to go after signing in: only paths on this site. Control
+ * characters (which browsers strip, turning `/\t/host` into `//host`) and
+ * backslashes are refused, and the result is resolved like a URL.
+ */
 export function safeNext(next: string | null): string {
-  return next && next.startsWith('/') && !next.startsWith('//') && !next.startsWith('/\\') ? next : '/';
+  const unsafe = [...next ?? ''].some((c) => c.charCodeAt(0) < 0x20 || c === '\u007f' || c === '\\');
+  if (!next || !next.startsWith('/') || unsafe) return '/';
+  let url: URL;
+  try {
+    url = new URL(next, BASE);
+  } catch {
+    return '/';
+  }
+  if (url.origin !== BASE || url.pathname.startsWith('//')) return '/';
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
 /** Shows `children` only to a signed-in account; others go to sign-in. */

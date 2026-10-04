@@ -84,7 +84,18 @@ describe('Sign-in', () => {
 
   it('only follows next to paths on this site', () => {
     expect(safeNext('/captures/7?page=2')).toBe('/captures/7?page=2');
-    for (const bad of [null, '', 'https://evil.example', '//evil.example', '/\\evil.example', 'javascript:alert(1)']) {
+    expect(safeNext('/audit?outcome=failure#top')).toBe('/audit?outcome=failure#top');
+    for (const bad of [
+      null,
+      '',
+      'https://evil.example',
+      '//evil.example',
+      '/\\evil.example',
+      '/\t/evil.example',
+      '/\n/evil.example',
+      '/%2F/evil.example'.replace('%2F', '/'),
+      'javascript:alert(1)',
+    ]) {
       expect(safeNext(bad)).toBe('/');
     }
   });
