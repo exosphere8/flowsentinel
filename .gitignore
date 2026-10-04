@@ -1,0 +1,43 @@
+# Rust build output
+target/
+**/*.rs.bk
+
+# Environment files: never commit secrets. Only the template is tracked.
+.env
+.env.*
+!.env.example
+
+# Packet captures: may contain sensitive traffic. Synthetic fixtures under
+# fixtures/ are explicitly re-included below.
+*.pcap
+*.pcapng
+*.cap
+!fixtures/**/*.pcap
+!fixtures/**/*.pcapng
+
+# Logs
+*.log
+logs/
+
+# Local databases and dumps
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+pgdata/
+
+# Frontend dependencies and build artifacts
+node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+coverage/
+
+# Editors and OS artifacts
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
