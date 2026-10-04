@@ -35,19 +35,33 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 8)
+## Current security posture (Milestone 9)
 
-- The API and the dashboard bind to `127.0.0.1` by default and have **no authentication yet**.
-  Anyone who can reach them can import, read and delete captures, change alert statuses and
-  change retention. Do not expose them to a network.
-  The server logs a warning if configured to listen on a non-loopback address.
+- Every API call except sign-in and `/health` needs a signed-in session, and each account has a
+  role: viewers read, analysts also import and triage, admins also delete captures, change
+  settings, manage accounts and read the audit log. The server checks the role on every request;
+  the dashboard only hides what a role cannot use.
+- Passwords are hashed with Argon2id (19 MiB, 2 passes), at most four at a time. Session tokens
+  are 256-bit random values in an `HttpOnly`, `SameSite=Strict` cookie (`Secure` and
+  `__Host-`-prefixed with `FLOWSENTINEL_SECURE_COOKIES=true`), stored only as SHA-256 digests,
+  issued fresh at each sign-in, and ended by inactivity (30 minutes), age (12 hours), sign-out,
+  or any change to the account's role, state or password.
+- State-changing requests need the session's CSRF token in `X-CSRF-Token`, and requests that a
+  browser marks as cross-site, or whose `Origin` differs from their `Host`, are refused.
+- Failed sign-ins are limited per username (5 in 15 minutes) and per client address (20); wrong,
+  unknown and disabled accounts get the same answer after the same amount of hashing work.
+- A security audit log records sign-ins, refused requests and every change with account, client
+  address and outcome, without passwords or tokens, and is kept for a configurable period.
+  Details: [docs/authentication.md](docs/authentication.md).
+- The server listens on `127.0.0.1` by default. To reach it from a network, put it behind an
+  HTTPS reverse proxy and set `FLOWSENTINEL_SECURE_COOKIES=true`; it logs a warning when it
+  listens elsewhere without secure cookies. It never needs root privileges.
 - The API sends no CORS headers, and every state-changing request needs a non-simple content
   type (uploads require `application/vnd.tcpdump.pcap` or `application/octet-stream`) or method
   (`PUT`, `PATCH`, `DELETE`). Browsers therefore block cross-site requests to it from other origins.
   Requests whose `Host` header is not a name of the server (by default only loopback names) are
   refused with `421`, which stops DNS-rebinding pages from reaching a loopback API; set
-  `FLOWSENTINEL_ALLOWED_HOSTS` when clients use another name. CSRF protection and sessions
-  arrive with authentication in Milestone 9.
+  `FLOWSENTINEL_ALLOWED_HOSTS` when clients use another name.
 - Uploads are streamed to a randomly named file in the upload directory (owner-only permissions
   on Unix), limited in size (`FLOWSENTINEL_MAX_UPLOAD_MB`, checked against `Content-Length` and
   while streaming), in idle time (30 s) and in rate (at least 16 KiB/s on average after 30 s),
@@ -132,6 +146,5 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   invalid one. Only an alert's status can be changed through the API. Details:
   [docs/detection-rules.md](docs/detection-rules.md).
 
-Later milestones add authentication and RBAC (9), audit logging (9), further upload and
-container hardening and TLS to the database (11), and dependency auditing, secret scanning and
+Later milestones add further upload and container hardening and TLS to the database (11), and dependency auditing, secret scanning and
 static analysis in CI (11).

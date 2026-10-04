@@ -6,8 +6,10 @@ rules. No endpoint returns packet payloads, and
 TLS is never decrypted. The full OpenAPI 3.1 description is served at
 `GET /api/v1/openapi.json`.
 
-> The API has **no authentication yet** (Milestone 9). It listens on `127.0.0.1` by default; do
-> not expose it to a network. Import only captures you own or are authorized to analyze.
+> Every endpoint except `POST /auth/login` and `GET /health` needs a signed-in session, and
+> state-changing requests also need the session's CSRF token in `X-CSRF-Token`. Roles decide who
+> may import, triage, delete and change settings. See [authentication.md](authentication.md).
+> Import only captures you own or are authorized to analyze.
 
 ## Running
 
@@ -50,8 +52,12 @@ container image uses it as its health check.
 
 ## Importing a capture
 
+Sign in first and keep the cookie and CSRF token (see
+[authentication.md](authentication.md#csrf-protection)); importing needs the analyst or admin
+role.
+
 ```bash
-curl -X POST \
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST \
   -H 'Content-Type: application/vnd.tcpdump.pcap' \
   --data-binary @fixtures/pcap/flows-mixed.pcap \
   'http://127.0.0.1:8080/api/v1/captures?file_name=flows-mixed.pcap'
@@ -127,6 +133,9 @@ All paths are under `/api/v1`. IDs are integers.
 | `GET /filters/fields?target=packets\|flows` | Filterable fields with types, operators and allowed values |
 | `GET /settings/retention`, `PUT /settings/retention` | Retention settings (see [data-retention.md](data-retention.md)) |
 | `GET /openapi.json` | OpenAPI description |
+| `POST /auth/login`, `GET /auth/session`, `POST /auth/logout`, `PUT /auth/password` | Sessions and passwords (see [authentication.md](authentication.md#endpoints)) |
+| `GET /users`, `POST /users`, `PATCH /users/{id}`, `DELETE /users/{id}` | Accounts (admin) |
+| `GET /audit` | The audit log (admin) |
 | `GET /health` (no prefix) | Liveness: `{"status":"ok","service":"flowsentinel-api"}` |
 | `GET /` and other paths outside `/api/v1` (no prefix) | The dashboard, when `FLOWSENTINEL_DASHBOARD_DIR` is set; otherwise `404` |
 
@@ -168,8 +177,9 @@ response says so in its `nature` field, next to the rule's uncertainty and likel
 positives.
 
 ```bash
-curl 'http://127.0.0.1:8080/api/v1/captures/1/alerts?severity=high'
-curl -X PATCH -H 'Content-Type: application/json' -d '{"status":"false_positive"}' \
+curl -b cookies.txt 'http://127.0.0.1:8080/api/v1/captures/1/alerts?severity=high'
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X PATCH -H 'Content-Type: application/json' \
+  -d '{"status":"false_positive"}' \
   'http://127.0.0.1:8080/api/v1/captures/1/alerts/4'
 ```
 
@@ -195,14 +205,17 @@ Every error is JSON with a stable `code`:
 
 | Status | Codes |
 | --- | --- |
-| 400 | `invalid_query`, `invalid_path`, `invalid_page`, `invalid_per_page`, `invalid_sort`, `invalid_target`, `unsupported_extension`, `empty_upload`, `upload_interrupted`, `invalid_ttl`, `invalid_max_packets`, `invalid_body` (malformed JSON); filter errors (`unknown_field`, `syntax_error`, `invalid_value`, ... with a `position`; see [filter-language.md](filter-language.md#limits-and-errors)) |
-| 404 | `not_found` (unknown capture, packet, flow or endpoint) |
+| 400 | `invalid_query`, `invalid_path`, `invalid_page`, `invalid_per_page`, `invalid_sort`, `invalid_target`, `unsupported_extension`, `empty_upload`, `upload_interrupted`, `invalid_ttl`, `invalid_max_packets`, `invalid_body` (malformed JSON); accounts: `invalid_username`, `weak_password`, `wrong_password`, `nothing_to_change`, `cannot_delete_self`; audit filters: `invalid_action`, `invalid_outcome`, `invalid_actor`; filter errors (`unknown_field`, `syntax_error`, `invalid_value`, ... with a `position`; see [filter-language.md](filter-language.md#limits-and-errors)) |
+| 401 | `unauthenticated` (no session, or it ended); `invalid_credentials` (sign-in) |
+| 403 | `forbidden` (the role does not allow it); `csrf_token_invalid`; `cross_site_request` |
+| 404 | `not_found` (unknown capture, packet, flow, account or endpoint) |
 | 405 | `method_not_allowed` |
+| 409 | `username_taken`; `last_admin` (it would leave no enabled admin) |
 | 408 | `upload_timeout` |
 | 413 | `upload_too_large`; `invalid_body` for a JSON body over 16 KiB |
 | 415 | `unsupported_media_type`; `invalid_body` for a JSON body without `Content-Type: application/json` |
 | 422 | Capture errors with the same codes as the CLI (`invalid_magic`, `unsupported_format`, `truncated_record_data`, ...); `invalid_body` for well-formed JSON with missing or unknown fields |
-| 429 | `import_busy`; `filter_busy` (too many filtered lists running) |
+| 429 | `import_busy`; `filter_busy` (too many filtered lists running); `too_many_attempts` (sign-in lockout, with `Retry-After`) |
 | 500 | `internal_error`; the cause is logged, never returned |
 | 421 | `invalid_host`: the `Host` header is not one the server answers |
 | 503 | `database_unavailable`; `server_busy` (no database slot within 10 seconds); `query_timeout` (a filtered list took longer than its limit) |

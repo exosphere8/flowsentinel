@@ -2,9 +2,11 @@ import { useId, useState, type FormEvent } from 'react';
 
 import { api, toApiError, type FilterTarget, type RetentionSettings } from '../api/client';
 import { SeverityBadge } from '../components/Badges';
-import { TableScroll } from '../components/Details';
+import { KeyValueList, TableScroll } from '../components/Details';
 import { PageHeader } from '../components/Layout';
 import { ErrorState, HeuristicNotice, Loading } from '../components/States';
+import { useCan } from '../lib/auth';
+import { formatNumber } from '../lib/format';
 import { useResource } from '../lib/useResource';
 import { useTitle } from '../lib/useTitle';
 
@@ -140,6 +142,7 @@ export function SettingsPage() {
   useTitle('Settings');
   const retention = useResource('retention', (signal) => api.retention(signal));
   const rules = useResource('rules', (signal) => api.rules(signal));
+  const canEdit = useCan('admin');
 
   return (
     <>
@@ -147,7 +150,20 @@ export function SettingsPage() {
       {retention.error ? (
         <ErrorState error={retention.error} onRetry={retention.reload} />
       ) : retention.data ? (
-        <RetentionForm settings={retention.data} />
+        canEdit ? (
+          <RetentionForm settings={retention.data} />
+        ) : (
+          <section className="card" aria-labelledby="retention-heading">
+            <h2 id="retention-heading">Retention</h2>
+            <KeyValueList
+              items={[
+                ['Keep captures for', `${formatNumber(retention.data.session_ttl_days)} days`],
+                ['Packets stored per capture', formatNumber(retention.data.max_packets_stored)],
+              ]}
+            />
+            <p className="muted">Only admins can change these settings.</p>
+          </section>
+        )
       ) : (
         <Loading />
       )}

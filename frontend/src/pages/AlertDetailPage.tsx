@@ -6,6 +6,7 @@ import { SeverityBadge, StatusBadge } from '../components/Badges';
 import { KeyValueList } from '../components/Details';
 import { CaptureTabs, PageHeader } from '../components/Layout';
 import { ErrorState, Loading } from '../components/States';
+import { useCan } from '../lib/auth';
 import { formatEndpoint, formatTime, humanize } from '../lib/format';
 import { useResource } from '../lib/useResource';
 import { idParam } from '../lib/useSearchState';
@@ -77,6 +78,7 @@ function Triage({ id, alert, onSaved }: { id: number; alert: AlertRow; onSaved: 
 function AlertDetail({ id, alertId }: { id: number; alertId: number }) {
   const loaded = useResource(`alert:${id}:${alertId}`, (signal) => api.getAlert(id, alertId, signal));
   const [saved, setSaved] = useState<AlertRow | null>(null);
+  const canTriage = useCan('analyst');
   const alert = saved?.alert_id === alertId ? saved : loaded.data;
   useTitle(alert ? `${alert.rule_name} (alert ${alertId})` : `Alert ${alertId}`);
   const crumbs = [
@@ -185,7 +187,16 @@ function AlertDetail({ id, alertId }: { id: number; alertId: number }) {
         )}
         <p className="muted">At most 50 flows and 50 packets are cited, starting with the first ones that matched.</p>
       </section>
-      <Triage key={alert.alert_id} id={id} alert={alert} onSaved={setSaved} />
+      {canTriage ? (
+        <Triage key={alert.alert_id} id={id} alert={alert} onSaved={setSaved} />
+      ) : (
+        <section className="card" aria-labelledby="status-heading">
+          <h2 id="status-heading">Triage</h2>
+          <p>
+            Status: <StatusBadge status={alert.status} />. Analysts and admins can change it.
+          </p>
+        </section>
+      )}
     </>
   );
 }

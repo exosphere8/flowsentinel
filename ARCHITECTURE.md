@@ -15,7 +15,7 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 8)
+## Current components (Milestone 9)
 
 ```
   browser: dashboard (React, served at /)
@@ -71,8 +71,19 @@ will live. It is updated at the end of every milestone.
   running requests 30 seconds.
 - Configuration is read through an injectable lookup (`Config::from_lookup`), so tests never
   mutate process-global environment variables.
-- The default bind address is `127.0.0.1:8080`. Binding elsewhere logs a warning until
-  authentication exists.
+- The default bind address is `127.0.0.1:8080`. Binding elsewhere without secure cookies logs a
+  warning.
+- `auth.rs` holds sessions and access control (see [docs/authentication.md](docs/authentication.md)):
+  the `authenticate` middleware on every protected route (session cookie to account, CSRF check
+  on state-changing methods), the `same_origin` middleware on all of `/api/v1`, the
+  `Authorized<R>` extractor that handlers use to require a role (`Viewer`, `Analyst`, `Admin`)
+  and that audits refusals, and Argon2id hashing on blocking threads behind a semaphore.
+  `ratelimit.rs` counts failed password checks per username and client address. `accounts.rs`
+  has the sign-in, session, password, account and audit-log handlers; `audit.rs` records events
+  to the database and the log; `bootstrap.rs` creates the first admin from a password file and
+  implements `flowsentinel-api create-user`.
+- `main.rs` serves with `into_make_service_with_connect_info`, so handlers see the client address
+  for limits and the audit log.
 
 ### `crates/analysis`
 
@@ -99,6 +110,10 @@ PostgreSQL persistence with SQLx. See [docs/data-retention.md](docs/data-retenti
   publishes them. Dropping it rolls everything back.
 - `PacketRow::from_analyzed` extracts indexed columns and serializes metadata to JSON text off the
   async runtime; `add_packets` moves the rows into the insert, so metadata is never copied.
+- `accounts.rs` stores accounts, sign-in sessions (token digests only) and audit events. Changes
+  that could remove the last enabled admin lock the admin rows first, so two concurrent changes
+  cannot both succeed; role, state and password changes end the account's sessions in the same
+  transaction.
 - Feature `test-support` provides `testing::TestDatabase`, a migrated database created per test
   and dropped afterwards, even if the test panics.
 
@@ -270,7 +285,6 @@ metadata API, same-origin.
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `api-server` | 9 | Accounts, roles, sessions and audit logging |
 
 Data will flow in one direction:
 

@@ -2,6 +2,8 @@
 // metadata; no endpoint returns packet payloads.
 import type {
   AlertRow,
+  AuditEvent,
+  AuditOutcome,
   ErrorResponse,
   FilterCheck,
   FilterField,
@@ -13,9 +15,13 @@ import type {
   Paged,
   Position,
   RetentionSettings,
+  Role,
   RuleInfo,
   Session,
   SessionDetail,
+  SessionInfo,
+  User,
+  UserPatch,
 } from './schema';
 
 export type * from './schema';
@@ -86,13 +92,34 @@ function errorBody(body: unknown): ErrorResponse['error'] | null {
   return { code, message, position: valid ? (position as Position) : null };
 }
 
+/** Header that carries the session's CSRF token on state-changing requests. */
+export const CSRF_HEADER = 'X-CSRF-Token';
+
+let csrfToken: string | null = null;
+let onUnauthorized: (() => void) | null = null;
+
+/** Sets the CSRF token sent with every POST, PUT, PATCH and DELETE. */
+export function setCsrfToken(token: string | null) {
+  csrfToken = token;
+}
+
+/** Called when a request finds the session missing or ended. */
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler;
+}
+
+const SAFE_METHODS = new Set(['GET', 'HEAD']);
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const csrf: Record<string, string> =
+    !SAFE_METHODS.has(method) && csrfToken ? { [CSRF_HEADER]: csrfToken } : {};
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...init,
       credentials: 'same-origin',
-      headers: { Accept: 'application/json', ...init.headers },
+      headers: { Accept: 'application/json', ...csrf, ...init.headers },
     });
   } catch (error) {
     if (isAbort(error)) throw error;
@@ -110,6 +137,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!response.ok) {
     const error = errorBody(body);
+    // A wrong password at sign-in is also a 401; only an ended session
+    // signs the dashboard out.
+    if (response.status === 401 && error?.code === 'unauthenticated') onUnauthorized?.();
     throw new ApiError(
       response.status,
       error?.code ?? 'http_error',
@@ -147,6 +177,14 @@ export interface FlowQuery extends PageQuery {
   filter?: string;
 }
 
+export interface AuditQuery {
+  page?: number;
+  per_page?: number;
+  action?: string;
+  outcome?: AuditOutcome;
+  actor?: string;
+}
+
 export interface AlertQuery extends PageQuery {
   severity?: Severity;
   status?: AlertStatus;
@@ -155,7 +193,40 @@ export interface AlertQuery extends PageQuery {
 
 const enc = encodeURIComponent;
 
+export const ROLES: readonly Role[] = ['viewer', 'analyst', 'admin'];
+
+/** Whether `role` includes everything `required` may do. */
+export function roleIncludes(role: Role | null | undefined, required: Role): boolean {
+  return role ? ROLES.indexOf(role) >= ROLES.indexOf(required) : false;
+}
+
 export const api = {
+  session: (signal?: AbortSignal) => request<SessionInfo>('/auth/session', { signal }),
+
+  login: (username: string, password: string) =>
+    request<SessionInfo>('/auth/login', json('POST', { username, password })),
+
+  logout: () => request<undefined>('/auth/logout', { method: 'POST' }),
+
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<SessionInfo>(
+      '/auth/password',
+      json('PUT', { current_password: currentPassword, new_password: newPassword }),
+    ),
+
+  listUsers: (query: { page?: number; per_page?: number }, signal?: AbortSignal) =>
+    request<Paged<User>>(`/users${buildQuery({ ...query })}`, { signal }),
+
+  createUser: (username: string, password: string, role: Role) =>
+    request<User>('/users', json('POST', { username, password, role })),
+
+  updateUser: (id: number, patch: UserPatch) => request<User>(`/users/${id}`, json('PATCH', patch)),
+
+  deleteUser: (id: number) => request<undefined>(`/users/${id}`, { method: 'DELETE' }),
+
+  listAudit: (query: AuditQuery, signal?: AbortSignal) =>
+    request<Paged<AuditEvent>>(`/audit${buildQuery({ ...query })}`, { signal }),
+
   overview: (signal?: AbortSignal) => request<Overview>('/overview', { signal }),
 
   listCaptures: (query: PageQuery, signal?: AbortSignal) =>

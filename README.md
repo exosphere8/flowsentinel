@@ -45,6 +45,10 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   an overview, captures, packets with their protocol trees, flows, alerts with their evidence
   and triage, and settings. Tables are paged, sorted and filtered on the server, display filters
   are validated as they are typed, and no packet payload is ever rendered.
+- **Milestone 9, accounts and auditing:** every API call needs a signed-in session. Accounts have
+  the role viewer, analyst or admin; passwords are hashed with Argon2id. Sessions expire after
+  inactivity and after a fixed lifetime, state changes need a CSRF token, repeated failed
+  sign-ins are locked out, and a security audit log records sign-ins, refusals and every change.
 
 ## Quick start
 
@@ -58,10 +62,14 @@ cp .env.example .env            # replace each "change-me", using the same passw
                                 # POSTGRES_PASSWORD and FLOWSENTINEL_DATABASE_URL
 
 docker compose up -d --wait     # PostgreSQL + Redis, waits for health checks
+make admin                      # creates the first admin account (asks for a name and password)
 make dev                        # loads .env, migrates the database, serves http://127.0.0.1:8080
 ```
 
-Without `make`, export the variables from `.env` yourself and run `cargo run -p api-server`.
+Without `make`, export the variables from `.env` yourself and run `cargo run -p api-server`; create
+the first admin with `cargo run -p api-server -- create-user --username NAME --role admin`, which
+reads the password from standard input. Accounts, roles, sessions and the audit log are described
+in [docs/authentication.md](docs/authentication.md).
 
 ### Dashboard
 
@@ -77,9 +85,11 @@ an unprivileged user:
 
 ```bash
 docker compose --profile app up -d --build --wait   # http://127.0.0.1:8080
+read -rs PW && printf '%s\n' "$PW" | docker compose --profile app exec -T app \
+  flowsentinel-api create-user --username admin --role admin
 ```
 
-Import a capture on the **Captures** page, for example `fixtures/pcap/detect-mixed.pcap`. See
+Sign in, then import a capture on the **Captures** page, for example `fixtures/pcap/detect-mixed.pcap`. See
 [docs/dashboard.md](docs/dashboard.md) for the pages, the development server, security headers
 and tests.
 
@@ -89,12 +99,18 @@ In another terminal:
 curl http://127.0.0.1:8080/health
 # {"status":"ok","service":"flowsentinel-api"}
 
-curl -X POST -H 'Content-Type: application/vnd.tcpdump.pcap' \
+# Sign in (everything else answers 401 without a session); keep the cookie and the CSRF token.
+read -rs PW && CSRF=$(curl -s -c cookies.txt -H 'Content-Type: application/json' \
+  -d "{\"username\":\"admin\",\"password\":\"$PW\"}" http://127.0.0.1:8080/api/v1/auth/login \
+  | sed -n 's/.*"csrf_token":"\([0-9a-f]*\)".*/\1/p')
+
+curl -b cookies.txt -H "X-CSRF-Token: $CSRF" -X POST -H 'Content-Type: application/vnd.tcpdump.pcap' \
   --data-binary @fixtures/pcap/flows-mixed.pcap \
   'http://127.0.0.1:8080/api/v1/captures?file_name=flows-mixed.pcap'
-curl 'http://127.0.0.1:8080/api/v1/captures/1/flows?sort=-bytes'
-curl -G 'http://127.0.0.1:8080/api/v1/captures/1/packets' --data-urlencode 'filter=tcp.port == 443'
-curl 'http://127.0.0.1:8080/api/v1/captures/1/alerts'
+curl -b cookies.txt 'http://127.0.0.1:8080/api/v1/captures/1/flows?sort=-bytes'
+curl -b cookies.txt -G 'http://127.0.0.1:8080/api/v1/captures/1/packets' --data-urlencode 'filter=tcp.port == 443'
+curl -b cookies.txt 'http://127.0.0.1:8080/api/v1/captures/1/alerts'
+rm cookies.txt
 
 cargo run -p cli -- --version
 # flowsentinel 0.1.0
@@ -216,11 +232,17 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_DETECTION_CONFIG` | built-in thresholds | Detection thresholds (TOML; see `config/detection.example.toml`) |
 | `FLOWSENTINEL_DASHBOARD_DIR` | not set | Built dashboard to serve at `/` (`frontend/dist`) |
 | `FLOWSENTINEL_PORT` | 8080 | Port the Compose `app` container is published on (127.0.0.1 only) |
+| `FLOWSENTINEL_SESSION_IDLE_MINUTES` | 30 | A session ends after this long without a request |
+| `FLOWSENTINEL_SESSION_MAX_HOURS` | 12 | A session ends this long after sign-in |
+| `FLOWSENTINEL_SECURE_COOKIES` | `false` | `true` when served through HTTPS: `Secure`, `__Host-` session cookie |
+| `FLOWSENTINEL_AUDIT_RETENTION_DAYS` | 365 | Days audit events are kept |
+| `FLOWSENTINEL_ADMIN_USERNAME`, `FLOWSENTINEL_ADMIN_PASSWORD_FILE` | `admin`, not set | Creates the first admin from a password file while no account exists |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
-The server logs a warning if it binds to a non-loopback address, because the API has no
-authentication until Milestone 9.
+Keep the server on loopback, or put it behind an HTTPS reverse proxy and set
+`FLOWSENTINEL_SECURE_COOKIES=true`; it logs a warning when it listens on a non-loopback address
+without secure cookies. See [docs/authentication.md](docs/authentication.md).
 
 ## Development
 
@@ -228,6 +250,7 @@ authentication until Milestone 9.
 | --- | --- |
 | `make up` / `make down` | Start or stop PostgreSQL and Redis |
 | `make dev` | Run the API server with the settings in `.env` |
+| `make admin` | Create an admin account (asks for a name and a password) |
 | `make fmt` | Format code |
 | `make lint` | Clippy with `-D warnings` |
 | `make test` | Run all tests (database tests skip without a server) |
@@ -275,7 +298,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 6 | Display-filter language | Done |
 | 7 | Explainable rule-based detection | Done |
 | 8 | React dashboard | Done |
-| 9 | Authentication, RBAC and auditing | Planned |
+| 9 | Authentication, RBAC and auditing | Done |
 | 10 | Authorized live capture | Planned |
 | 11 | Observability, performance and hardening | Planned |
 | 12 | Public release (v0.1.0) | Planned |

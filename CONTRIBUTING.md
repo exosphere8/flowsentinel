@@ -66,7 +66,7 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
-npm run e2e         # against a running server; see docs/dashboard.md
+npm run e2e         # against a running server with a first admin; see docs/dashboard.md
 ```
 
 When an API change alters the OpenAPI document, regenerate the snapshot and the dashboard's

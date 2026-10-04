@@ -111,7 +111,16 @@ jobs:
       - name: Check the API and the dashboard
         run: |
           curl -fsS http://127.0.0.1:8080/health
-          curl -fsS http://127.0.0.1:8080/api/v1/overview
+          # The API needs a session; create the first admin and sign in.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/v1/overview)" = "401"
+          password="ci-$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          printf '%s\n' "$password" | docker compose --profile app exec -T app \
+            flowsentinel-api create-user --username admin --role admin
+          curl -fsS -c "$RUNNER_TEMP/cookies" -H 'Content-Type: application/json' \
+            -d "{\"username\":\"admin\",\"password\":\"$password\"}" \
+            http://127.0.0.1:8080/api/v1/auth/login > /dev/null
+          curl -fsS -b "$RUNNER_TEMP/cookies" http://127.0.0.1:8080/api/v1/overview
           curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
           curl -fsSI http://127.0.0.1:8080/ | grep -qi "content-security-policy"
           # The container runs as an unprivileged user.
@@ -188,10 +197,16 @@ jobs:
       - name: Start the API server with the dashboard
         run: |
           mkdir -p "$RUNNER_TEMP/uploads"
+          # A throwaway first admin for the smoke tests.
+          password="ci-$(openssl rand -hex 16)"
+          echo "::add-mask::$password"
+          echo "E2E_ADMIN_PASSWORD=$password" >> "$GITHUB_ENV"
+          printf '%s\n' "$password" > "$RUNNER_TEMP/admin-password"
           FLOWSENTINEL_DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres \
           FLOWSENTINEL_API_ADDR=127.0.0.1:18080 \
           FLOWSENTINEL_UPLOAD_DIR="$RUNNER_TEMP/uploads" \
           FLOWSENTINEL_DASHBOARD_DIR="$PWD/frontend/dist" \
+          FLOWSENTINEL_ADMIN_PASSWORD_FILE="$RUNNER_TEMP/admin-password" \
             nohup target/debug/api-server > "$RUNNER_TEMP/api-server.log" 2>&1 &
           for _ in $(seq 1 60); do
             curl -fsS http://127.0.0.1:18080/health && exit 0

@@ -1,9 +1,13 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use std::net::SocketAddr;
+
+use api_server::auth::AuthConfig;
 use api_server::host::HostPolicy;
 use api_server::{
-    ApiConfig, AppState, Config, DATABASE_URL_ENV_VAR, app_with_state, healthcheck, upload,
+    ApiConfig, AppState, Config, DATABASE_URL_ENV_VAR, app_with_state, bootstrap, healthcheck,
+    upload,
 };
 use capture::CaptureLimits;
 use detection_engine::DetectionConfig;
@@ -16,16 +20,19 @@ use tracing_subscriber::EnvFilter;
 const PURGE_INTERVAL: Duration = Duration::from_secs(3600);
 /// How long in-flight requests may run after a shutdown signal.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+const USAGE: &str = "usage: flowsentinel-api [healthcheck | create-user --username NAME --role admin|analyst|viewer]";
 /// Time allowed for `api-server healthcheck`.
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
         None => {}
-        Some("healthcheck") => return run_healthcheck().await,
-        Some(other) => {
-            eprintln!("error: unknown argument {other:?}; usage: api-server [healthcheck]");
+        Some("healthcheck") if args.len() == 1 => return run_healthcheck().await,
+        Some("create-user") => return run_create_user(args.get(1..).unwrap_or_default()).await,
+        Some(_) => {
+            eprintln!("error: unknown arguments; {USAGE}");
             return ExitCode::from(2);
         }
     }
@@ -109,10 +116,11 @@ async fn main() -> ExitCode {
         tracing::info!(path = %dir.display(), "serving the dashboard at /");
     }
 
-    if !config.addr.ip().is_loopback() {
+    if !config.addr.ip().is_loopback() && !config.auth.secure_cookies {
         tracing::warn!(
             addr = %config.addr,
-            "listening on a non-loopback address; the API has no authentication yet"
+            "listening on a non-loopback address with FLOWSENTINEL_SECURE_COOKIES=false; \
+             serve the API through HTTPS and set FLOWSENTINEL_SECURE_COOKIES=true"
         );
     }
 
@@ -130,7 +138,11 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     tracing::info!("database schema is up to date");
-    tokio::spawn(purge_expired(storage.clone()));
+    if let Err(err) = ensure_accounts(&storage, &config).await {
+        tracing::error!(error = %err, "invalid configuration: FLOWSENTINEL_ADMIN_PASSWORD_FILE");
+        return ExitCode::FAILURE;
+    }
+    tokio::spawn(purge_expired(storage.clone(), config.auth));
 
     // An upload can never exceed the analysis size limit.
     let capture_limits = CaptureLimits {
@@ -148,6 +160,7 @@ async fn main() -> ExitCode {
             host_policy,
             detection,
             dashboard_dir: config.dashboard_dir.clone(),
+            auth: config.auth,
         },
         config.max_concurrent_imports,
     );
@@ -164,7 +177,10 @@ async fn main() -> ExitCode {
     // After a shutdown signal, in-flight requests get SHUTDOWN_GRACE to
     // finish; then they are dropped, which deletes their upload files.
     let (stopping, stopped) = tokio::sync::oneshot::channel::<()>();
-    let serve = axum::serve(listener, app_with_state(state)).with_graceful_shutdown(async move {
+    // Client addresses are recorded in the audit log and limit sign-in
+    // attempts.
+    let app = app_with_state(state).into_make_service_with_connect_info::<SocketAddr>();
+    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
         shutdown_signal().await;
         let _ = stopping.send(());
     });
@@ -213,8 +229,9 @@ async fn run_healthcheck() -> ExitCode {
     }
 }
 
-/// Deletes expired captures at startup and then every hour.
-async fn purge_expired(storage: Storage) {
+/// Deletes expired captures, ended sign-in sessions and old audit events
+/// at startup and then every hour.
+async fn purge_expired(storage: Storage, auth: AuthConfig) {
     let mut interval = tokio::time::interval(PURGE_INTERVAL);
     loop {
         interval.tick().await;
@@ -222,6 +239,111 @@ async fn purge_expired(storage: Storage) {
             Ok(0) => {}
             Ok(deleted) => tracing::info!(sessions = deleted, "expired captures deleted"),
             Err(err) => tracing::warn!(error = %err, "retention purge failed; will retry"),
+        }
+        if let Err(err) = storage.purge_auth_sessions(auth.session_idle).await {
+            tracing::warn!(error = %err, "sign-in session purge failed; will retry");
+        }
+        match storage.purge_audit(auth.audit_retention_days).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::info!(events = deleted, "old audit events deleted"),
+            Err(err) => tracing::warn!(error = %err, "audit purge failed; will retry"),
+        }
+    }
+}
+
+/// Creates the first admin from `FLOWSENTINEL_ADMIN_PASSWORD_FILE` while no
+/// account exists, and warns when there is still no account.
+async fn ensure_accounts(storage: &Storage, config: &Config) -> Result<(), String> {
+    let existing = storage.count_users().await.map_err(|e| e.to_string())?;
+    if let (Some(_), true) = (&config.admin_password_file, existing > 0) {
+        tracing::info!(
+            "accounts exist; FLOWSENTINEL_ADMIN_PASSWORD_FILE is ignored and can be removed"
+        );
+    } else if let Some(path) = &config.admin_password_file {
+        let password = bootstrap::read_password_file(path)?;
+        match bootstrap::first_admin(storage, &config.admin_username, password).await? {
+            Some(user) => tracing::info!(username = %user.username, "first admin account created"),
+            None => tracing::info!(
+                "accounts exist; FLOWSENTINEL_ADMIN_PASSWORD_FILE is ignored and can be removed"
+            ),
+        }
+    }
+    if storage.count_users().await.map_err(|e| e.to_string())? == 0 {
+        tracing::warn!(
+            "no accounts exist, so nobody can sign in; create an admin with \
+             `flowsentinel-api create-user --username NAME --role admin` (password on stdin) \
+             or FLOWSENTINEL_ADMIN_PASSWORD_FILE"
+        );
+    }
+    Ok(())
+}
+
+/// `create-user --username NAME --role ROLE`: reads the password from
+/// standard input (up to the first line ending), creates the account and
+/// exits.
+async fn run_create_user(args: &[String]) -> ExitCode {
+    let mut username = None;
+    let mut role = None;
+    let mut rest = args.iter();
+    while let Some(flag) = rest.next() {
+        match (flag.as_str(), rest.next()) {
+            ("--username", Some(value)) => username = Some(value.clone()),
+            ("--role", Some(value)) => role = storage::Role::parse(value),
+            _ => {
+                eprintln!("error: unexpected argument {flag:?}; {USAGE}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let (Some(username), Some(role)) = (username, role) else {
+        eprintln!("error: --username and a valid --role are required; {USAGE}");
+        return ExitCode::from(2);
+    };
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(database_url) = config.database_url.as_deref() else {
+        eprintln!("error: set FLOWSENTINEL_DATABASE_URL");
+        return ExitCode::FAILURE;
+    };
+    let typed = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let read = if typed {
+        eprintln!("Password (input is visible; prefer piping it in), then Enter:");
+        bootstrap::read_password_line(std::io::stdin().lock())
+    } else {
+        bootstrap::read_password(std::io::stdin().lock())
+    };
+    let password = match read {
+        // Only the first line counts.
+        Ok(text) => text.lines().next().unwrap_or_default().to_owned(),
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let storage = match Storage::connect(database_url, 2).await {
+        Ok(storage) => storage,
+        Err(err) => {
+            eprintln!("error: cannot connect to PostgreSQL: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(err) = storage.migrate().await {
+        eprintln!("error: {err}");
+        return ExitCode::FAILURE;
+    }
+    match bootstrap::create_user(&storage, &username, role, password).await {
+        Ok(user) => {
+            println!("created account {} with role {}", user.username, user.role);
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            eprintln!("error: {err}");
+            ExitCode::FAILURE
         }
     }
 }

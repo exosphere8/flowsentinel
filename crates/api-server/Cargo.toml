@@ -11,12 +11,14 @@ publish.workspace = true
 
 [dependencies]
 analysis.workspace = true
+argon2.workspace = true
 axum.workspace = true
 capture.workspace = true
 detection-engine.workspace = true
 filter-language.workspace = true
 flow-engine.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true

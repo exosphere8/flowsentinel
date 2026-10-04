@@ -1,4 +1,4 @@
-.PHONY: help up down dev test test-db lint fmt check fixtures dashboard frontend-check e2e
+.PHONY: help up down dev admin test test-db lint fmt check fixtures dashboard frontend-check e2e
 
 CARGO ?= cargo
 NPM ?= npm
@@ -15,6 +15,13 @@ down: ## Stop PostgreSQL and Redis (data volumes are kept)
 dev: ## Run the API server on 127.0.0.1:8080 with settings from .env
 	@test -f .env || { echo "copy .env.example to .env and set the passwords first"; exit 1; }
 	set -a && . ./.env && set +a && $(CARGO) run -p api-server
+
+admin: ## Create an admin account (asks for a name and a password)
+	@test -f .env || { echo "copy .env.example to .env and set the passwords first"; exit 1; }
+	@printf 'Username: '; IFS= read -r user; printf 'Password (not shown): '; \
+	  trap 'stty echo' EXIT INT TERM; stty -echo; IFS= read -r pw; stty echo; echo; \
+	  set -a && . ./.env && set +a && \
+	  printf '%s\n' "$$pw" | $(CARGO) run -q -p api-server -- create-user --username "$$user" --role admin
 
 test: ## Run all workspace tests (database tests skip without a server)
 	$(CARGO) test --workspace

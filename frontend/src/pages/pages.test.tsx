@@ -145,7 +145,7 @@ describe('Capture', () => {
     });
     mockApi([['GET', /\/captures\/7$/, async () => { await ready; return { body: sessionDetail }; }]]);
     renderAt('/captures/7');
-    expect(await screen.findByRole('status')).toHaveTextContent('Loading');
+    expect(await screen.findByText('Loading…')).toBeInTheDocument();
     release();
     expect(await screen.findByRole('heading', { name: 'detect-mixed.pcap', level: 1 })).toBeInTheDocument();
   });

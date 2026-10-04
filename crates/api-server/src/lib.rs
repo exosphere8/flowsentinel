@@ -5,12 +5,17 @@
 //! `GET /health`; [`app_with_state`] adds the `/api/v1` endpoints backed by
 //! PostgreSQL and, when configured, the built dashboard.
 
+pub mod accounts;
+pub mod audit;
+pub mod auth;
+pub mod bootstrap;
 pub mod dashboard;
 pub mod error;
 pub mod extract;
 pub mod healthcheck;
 pub mod host;
 pub mod openapi;
+pub mod ratelimit;
 pub mod routes;
 pub mod state;
 pub mod upload;
@@ -23,7 +28,7 @@ use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
 use axum::middleware;
-use axum::routing::get;
+use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
 use utoipa::OpenApi;
@@ -53,6 +58,19 @@ pub const QUERY_TIMEOUT_ENV_VAR: &str = "FLOWSENTINEL_QUERY_TIMEOUT_SECONDS";
 pub const DETECTION_CONFIG_ENV_VAR: &str = "FLOWSENTINEL_DETECTION_CONFIG";
 /// Optional directory with the built dashboard (`frontend/dist`).
 pub const DASHBOARD_DIR_ENV_VAR: &str = "FLOWSENTINEL_DASHBOARD_DIR";
+/// Minutes without a request after which a session ends.
+pub const SESSION_IDLE_ENV_VAR: &str = "FLOWSENTINEL_SESSION_IDLE_MINUTES";
+/// Hours after sign-in after which a session ends.
+pub const SESSION_MAX_ENV_VAR: &str = "FLOWSENTINEL_SESSION_MAX_HOURS";
+/// `true` to mark the session cookie `Secure` (needs HTTPS in front).
+pub const SECURE_COOKIES_ENV_VAR: &str = "FLOWSENTINEL_SECURE_COOKIES";
+/// Days audit events are kept.
+pub const AUDIT_RETENTION_ENV_VAR: &str = "FLOWSENTINEL_AUDIT_RETENTION_DAYS";
+/// Name of the first admin account created from the password file.
+pub const ADMIN_USERNAME_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_USERNAME";
+/// File holding the first admin's password; used only while no account
+/// exists.
+pub const ADMIN_PASSWORD_FILE_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_PASSWORD_FILE";
 
 /// Default listen address: loopback only, so a fresh install is not reachable
 /// from the network.
@@ -64,6 +82,10 @@ pub const DEFAULT_DB_CONNECTIONS: u32 = 10;
 pub const DEFAULT_MAX_PACKETS: u64 = 1_000_000;
 pub const DEFAULT_MAX_ANALYSIS_SECONDS: u64 = 600;
 pub const DEFAULT_QUERY_TIMEOUT_SECONDS: u64 = 10;
+pub const DEFAULT_SESSION_IDLE_MINUTES: u64 = 30;
+pub const DEFAULT_SESSION_MAX_HOURS: u64 = 12;
+pub const DEFAULT_AUDIT_RETENTION_DAYS: u64 = 365;
+pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
 
 /// Largest JSON request body (only the retention settings take one).
 const MAX_JSON_BODY_BYTES: usize = 16 * 1024;
@@ -98,10 +120,26 @@ pub fn app() -> Router {
 /// description, and the dashboard at `/` when `dashboard_dir` is set.
 /// Unknown `/api/v1` paths always get a JSON error, never the dashboard.
 /// Requests for unexpected `Host` names are refused.
+///
+/// Every `/api/v1` route except `POST /auth/login` needs a signed-in
+/// session; handlers that change data also check the account's role.
 pub fn app_with_state(state: AppState) -> Router {
     let policy = Arc::new(state.config.host_policy.clone());
     let dashboard_dir = state.config.dashboard_dir.clone();
-    let api = Router::new()
+    let public = Router::new().route("/auth/login", post(accounts::login));
+    let protected = Router::new()
+        .route("/auth/session", get(accounts::session))
+        .route("/auth/logout", post(accounts::logout))
+        .route("/auth/password", put(accounts::change_password))
+        .route(
+            "/users",
+            get(accounts::list_users).post(accounts::create_user),
+        )
+        .route(
+            "/users/{id}",
+            patch(accounts::update_user).delete(accounts::delete_user),
+        )
+        .route("/audit", get(accounts::list_audit))
         .route("/overview", get(routes::overview))
         .route(
             "/captures",
@@ -131,11 +169,18 @@ pub fn app_with_state(state: AppState) -> Router {
         .route("/filters/validate", get(routes::validate_filter))
         .route("/filters/fields", get(routes::filter_fields))
         .route("/openapi.json", get(openapi_json))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::authenticate,
+        ));
+    let api = public
+        .merge(protected)
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)
         // Uploads stream their raw body under their own limit; this caps
         // everything read through the JSON extractor.
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
+        .layer(middleware::from_fn(auth::same_origin))
         .with_state(state);
     let router = Router::new()
         .route("/health", get(health))
@@ -176,6 +221,11 @@ pub struct Config {
     pub detection_config: Option<PathBuf>,
     /// Built dashboard to serve at `/` (default: none).
     pub dashboard_dir: Option<PathBuf>,
+    pub auth: auth::AuthConfig,
+    /// Name for the first admin account.
+    pub admin_username: String,
+    /// Password file for the first admin account.
+    pub admin_password_file: Option<PathBuf>,
 }
 
 impl fmt::Debug for Config {
@@ -196,6 +246,9 @@ impl fmt::Debug for Config {
             .field("query_timeout_seconds", &self.query_timeout_seconds)
             .field("detection_config", &self.detection_config)
             .field("dashboard_dir", &self.dashboard_dir)
+            .field("auth", &self.auth)
+            .field("admin_username", &self.admin_username)
+            .field("admin_password_file", &self.admin_password_file)
             .finish()
     }
 }
@@ -223,6 +276,11 @@ pub enum ConfigError {
         "invalid FLOWSENTINEL_ALLOWED_HOSTS value {value:?}: expected comma-separated host names or addresses, or *"
     )]
     InvalidAllowedHosts { value: String },
+    #[error("invalid {variable} value {value:?}: expected true or false")]
+    InvalidBool {
+        variable: &'static str,
+        value: String,
+    },
 }
 
 impl Default for Config {
@@ -240,6 +298,9 @@ impl Default for Config {
             query_timeout_seconds: DEFAULT_QUERY_TIMEOUT_SECONDS,
             detection_config: None,
             dashboard_dir: None,
+            auth: auth::AuthConfig::default(),
+            admin_username: DEFAULT_ADMIN_USERNAME.to_owned(),
+            admin_password_file: None,
         }
     }
 }
@@ -352,6 +413,45 @@ impl Config {
         let upload_dir = path(UPLOAD_DIR_ENV_VAR);
         let detection_config = path(DETECTION_CONFIG_ENV_VAR);
         let dashboard_dir = path(DASHBOARD_DIR_ENV_VAR);
+        let idle_minutes = number(
+            &lookup,
+            SESSION_IDLE_ENV_VAR,
+            DEFAULT_SESSION_IDLE_MINUTES,
+            1,
+            1_440,
+        )?;
+        let max_hours = number(
+            &lookup,
+            SESSION_MAX_ENV_VAR,
+            DEFAULT_SESSION_MAX_HOURS,
+            1,
+            720,
+        )?;
+        let audit_days = number(
+            &lookup,
+            AUDIT_RETENTION_ENV_VAR,
+            DEFAULT_AUDIT_RETENTION_DAYS,
+            1,
+            3_650,
+        )?;
+        let secure_cookies = match lookup(SECURE_COOKIES_ENV_VAR) {
+            Some(raw) if !raw.trim().is_empty() => match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => {
+                    return Err(ConfigError::InvalidBool {
+                        variable: SECURE_COOKIES_ENV_VAR,
+                        value: raw,
+                    });
+                }
+            },
+            _ => false,
+        };
+        let admin_username = lookup(ADMIN_USERNAME_ENV_VAR)
+            .map(|raw| raw.trim().to_owned())
+            .filter(|raw| !raw.is_empty())
+            .unwrap_or_else(|| DEFAULT_ADMIN_USERNAME.to_owned());
+        let admin_password_file = path(ADMIN_PASSWORD_FILE_ENV_VAR);
         Ok(Self {
             addr,
             database_url,
@@ -365,6 +465,15 @@ impl Config {
             query_timeout_seconds,
             detection_config,
             dashboard_dir,
+            auth: auth::AuthConfig {
+                session_idle: std::time::Duration::from_secs(idle_minutes * 60),
+                session_lifetime: std::time::Duration::from_secs(max_hours * 3600),
+                secure_cookies,
+                audit_retention_days: u32::try_from(audit_days)
+                    .unwrap_or(DEFAULT_AUDIT_RETENTION_DAYS as u32),
+            },
+            admin_username,
+            admin_password_file,
         })
     }
 }
@@ -436,6 +545,11 @@ mod tests {
             (ALLOWED_HOSTS_ENV_VAR, "bad host"),
             (QUERY_TIMEOUT_ENV_VAR, "0"),
             (QUERY_TIMEOUT_ENV_VAR, "301"),
+            (SESSION_IDLE_ENV_VAR, "0"),
+            (SESSION_IDLE_ENV_VAR, "1441"),
+            (SESSION_MAX_ENV_VAR, "721"),
+            (AUDIT_RETENTION_ENV_VAR, "0"),
+            (SECURE_COOKIES_ENV_VAR, "maybe"),
         ] {
             let err = Config::from_lookup(lookup_with(&[(variable, bad)])).unwrap_err();
             assert!(err.to_string().contains(variable), "{err}");
@@ -461,6 +575,32 @@ mod tests {
             Some(PathBuf::from("/etc/flowsentinel/detection.toml"))
         );
         assert_eq!(ok.dashboard_dir, Some(PathBuf::from("frontend/dist")));
+    }
+
+    #[test]
+    fn session_settings_are_read() {
+        let config = Config::from_lookup(lookup_with(&[
+            (SESSION_IDLE_ENV_VAR, "15"),
+            (SESSION_MAX_ENV_VAR, "8"),
+            (SECURE_COOKIES_ENV_VAR, " TRUE "),
+            (AUDIT_RETENTION_ENV_VAR, "90"),
+            (ADMIN_USERNAME_ENV_VAR, "root-admin"),
+            (ADMIN_PASSWORD_FILE_ENV_VAR, "/run/secrets/admin"),
+        ]))
+        .unwrap();
+        assert_eq!(config.auth.session_idle.as_secs(), 900);
+        assert_eq!(config.auth.session_lifetime.as_secs(), 8 * 3600);
+        assert!(config.auth.secure_cookies);
+        assert_eq!(config.auth.audit_retention_days, 90);
+        assert_eq!(config.admin_username, "root-admin");
+        assert_eq!(
+            config.admin_password_file,
+            Some(PathBuf::from("/run/secrets/admin"))
+        );
+        let defaults = Config::default();
+        assert!(!defaults.auth.secure_cookies);
+        assert_eq!(defaults.auth.session_idle.as_secs(), 1800);
+        assert_eq!(defaults.admin_username, "admin");
     }
 
     #[test]

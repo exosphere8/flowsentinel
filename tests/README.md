@@ -22,7 +22,7 @@ Unit and integration tests live next to the code they cover:
 | `crates/flow-engine/src/*.rs` | Flow keys, running statistics |
 | `crates/flow-engine/tests/flows.rs` | Direction, initiator inference, TCP states, expiry, eviction, retention, statistics, timestamps, determinism; property test that packet and byte totals are conserved |
 | `crates/cli/tests/flows.rs` | `flowsentinel flows` against `flows-mixed.pcap`: every flow, sorting, limits, exit codes, payload privacy |
-| `crates/api-server/src/*.rs` | Configuration parsing, `Host` checks, upload rate and stale-file cleanup |
+| `crates/api-server/src/*.rs` | Configuration parsing, `Host` checks, upload rate and stale-file cleanup, session tokens and CSRF derivation, cookies, username and password rules, Argon2id hashing, the sign-in limiter, password input |
 | `crates/analysis/tests/pipeline.rs` | Both analysis passes agree; packets carry flow IDs; a file changed between passes is detected; detection runs in the first pass and links alerts to flows |
 | `crates/filter-language/src/*.rs` | Lexer, parser precedence and limits, translation, type errors with positions, injection attempts, catalog documented |
 | `crates/filter-language/tests/properties.rs` | Property tests: arbitrary text never panics; generated filters compile and round-trip; quoted text is always one parameter |
@@ -36,6 +36,7 @@ Tests that need PostgreSQL create a disposable database per test (see
 | Location | What it covers |
 | --- | --- |
 | `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, alerts with flow links and triage, no secrets stored |
+| `crates/api-server/tests/auth.rs` | Sign-in, cookies and token storage, identical failure answers, lockout, CSRF and same-origin refusals, every role against every protected action, session expiry and limits, password changes, account management and the last-admin rule, first-admin creation, audit events without secrets |
 | `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, alerts and triage, OpenAPI, no secrets in any response |
 
 The dashboard's tests live in `frontend/` (see [docs/dashboard.md](../docs/dashboard.md#tests)):
@@ -45,6 +46,7 @@ The dashboard's tests live in `frontend/` (see [docs/dashboard.md](../docs/dashb
 | `frontend/src/api/client.test.ts` | The typed API client: query building, structured errors, uploads and JSON requests |
 | `frontend/src/lib/format.test.ts` | Number, byte, time and filter-position formatting |
 | `frontend/src/components/components.test.tsx` | Charts and their tables, paging, the filter bar's validation, the protocol tree's payload guard |
+| `frontend/src/pages/auth.test.tsx` | Sign-in and return to the requested page, `next` validation, sign-out when a session ends, CSRF headers on changes only, what each role sees, the Users, Audit log and Account pages |
 | `frontend/src/pages/pages.test.tsx` | Every page against a mocked API, each with an axe-core accessibility check; loading, error, empty and past-the-end states; filters, triage, deletion, retention validation |
 | `frontend/e2e/smoke.spec.ts` | Playwright: the built dashboard served by `api-server` with a real database; imports a fixture through the UI, walks every page, checks for console errors, CSP violations, payload markers and security headers |
 | `crates/api-server/tests/openapi.rs` | `docs/openapi.json`, from which the dashboard's API types are generated, matches the server |
