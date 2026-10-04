@@ -35,7 +35,7 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 1)
+## Current security posture (Milestone 2)
 
 - The API binds to `127.0.0.1` by default and has **no authentication yet**. Do not expose it to
   a network. The server logs a warning if configured to listen on a non-loopback address.
@@ -53,6 +53,12 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   Packet-count and time limits bound the work. It outputs container metadata only: packet bytes
   are skipped, never stored, and never appear in output or error messages. File names are reduced
   to a sanitized final component. Details: [docs/pcap-ingestion.md](docs/pcap-ingestion.md).
+- `inspect --decode` examines each packet's bytes only during one function call and keeps typed
+  header metadata. Payloads are reported by length only; no decoder type can hold payload bytes.
+  All field access is bounds-checked, traversal loops (VLAN tags, IPv6 extension headers) have
+  fixed limits, and a malformed packet yields a status and warning instead of an error. Property
+  tests and cargo-fuzz targets (`fuzz/`) exercise the parsers with arbitrary input. Details:
+  [docs/protocol-decoding.md](docs/protocol-decoding.md).
 
 Later milestones add authentication and RBAC (9), audit logging (9), upload hardening (5, 11),
 and dependency auditing, secret scanning and static analysis in CI (11).

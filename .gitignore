@@ -16,6 +16,9 @@ target/
 !fixtures/**/*.[pP][cC][aA][pP]
 !fixtures/**/*.[pP][cC][aA][pP][nN][gG]
 
+# Python bytecode (fixture generator)
+__pycache__/
+
 # Logs
 *.log
 logs/

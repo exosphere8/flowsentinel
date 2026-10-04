@@ -20,6 +20,9 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   Docker Compose services and CI.
 - **Milestone 1, safe offline PCAP ingestion:** `flowsentinel inspect --pcap` reads classic
   libpcap files with strict resource limits and reports container metadata only.
+- **Milestone 2, core packet decoding:** `inspect --decode` decodes Ethernet (with VLANs), ARP,
+  IPv4, IPv6 (with extension headers), ICMP, ICMPv6, TCP and UDP headers into a protocol tree.
+  Payloads are measured, never shown.
 
 ## Quick start
 
@@ -57,6 +60,23 @@ cargo run -p cli -- inspect --pcap fixtures/pcap/many-packets.pcap --max-packets
 and original length), or one JSON object with `--json`. Packet contents are never shown. Limits
 default to 512 MiB, 100,000 packets and 60 seconds. See
 [docs/pcap-ingestion.md](docs/pcap-ingestion.md) for flags, output fields, warnings and exit codes.
+
+Add `--decode` to decode protocol headers, and `--verbose` for each packet's protocol tree:
+
+```bash
+cargo run -p cli -- inspect --pcap fixtures/pcap/decode-ipv4.pcap --decode
+cargo run -p cli -- inspect --pcap fixtures/pcap/decode-ipv6.pcap --decode --verbose
+cargo run -p cli -- inspect --pcap fixtures/pcap/decode-malformed.pcap --decode --json
+```
+
+```text
+        #  Timestamp (UTC)                 Source             Destination        Protocol  Length  Info
+        1  2026-01-01T00:00:00.000000Z     02:00:00:00:00:01  ff:ff:ff:ff:ff:ff  ARP           42  who-has 192.0.2.1 tell 192.0.2.10
+        4  2026-01-01T00:00:00.030000Z     192.0.2.10         198.51.100.20      TCP           62  40001 -> 9 [SYN] seq=1000 win=64240 len=0
+```
+
+See [docs/protocol-decoding.md](docs/protocol-decoding.md) for supported protocols, statuses,
+warnings and validation rules.
 
 ### Windows note
 
@@ -101,8 +121,10 @@ crates/
   api-server/   Axum HTTP service (GET /health)
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
+  decoder/      Bounds-checked protocol decoder (metadata only)
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
+fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
 scripts/        Developer scripts, including the fixture generator
 tests/          Cross-service end-to-end tests (from Milestone 5)
 ```
@@ -113,7 +135,7 @@ tests/          Cross-service end-to-end tests (from Milestone 5)
 | --- | --- | --- |
 | 0 | Foundation and developer environment | Done |
 | 1 | Safe offline PCAP ingestion | Done |
-| 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Planned |
+| 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Done |
 | 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Planned |
 | 4 | Bidirectional flow reconstruction | Planned |
 | 5 | PostgreSQL persistence and REST API | Planned |

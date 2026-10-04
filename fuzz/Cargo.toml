@@ -1,0 +1,35 @@
+# Coverage-guided fuzz targets for the parsers. Requires a nightly toolchain
+# and cargo-fuzz; see fuzz/README.md. Kept out of the main workspace so the
+# stable build and CI are unaffected.
+[package]
+name = "flowsentinel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+authors = ["exosphere8"]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+capture = { path = "../crates/capture" }
+decoder = { path = "../crates/decoder" }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "decode_packet"
+path = "fuzz_targets/decode_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pcap_reader"
+path = "fuzz_targets/pcap_reader.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

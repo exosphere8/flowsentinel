@@ -2,7 +2,9 @@
 //!
 //! This crate parses only the PCAP container: the 24-byte global header and
 //! the 16-byte header in front of each packet record. It never interprets
-//! packet contents and never returns packet bytes in its public models.
+//! packet contents and never returns packet bytes in its public models. A
+//! [`PacketSink`] can borrow each packet's bytes transiently, for example to
+//! decode protocol headers.
 //!
 //! Safety properties:
 //!
@@ -37,10 +39,14 @@ pub use header::{
     Endianness, GLOBAL_HEADER_LEN, LinkType, PcapGlobalHeader, PcapVersion, TimestampResolution,
 };
 pub use inspect::{
-    CaptureReport, CaptureSummary, CompletionState, display_file_name, inspect_file,
-    inspect_file_with_clock, inspect_reader, open_capture,
+    CaptureReport, CaptureSummary, CompletionState, PacketSink, display_file_name, inspect_file,
+    inspect_file_with_clock, inspect_file_with_sink, inspect_reader, inspect_reader_with_sink,
+    open_capture,
 };
 pub use limits::{AppliedLimits, CaptureLimits, Clock, MonotonicClock};
-pub use reader::{MAX_SAFE_CAPTURED_LENGTH, PacketRecordMetadata, PcapReader, RECORD_HEADER_LEN};
+pub use reader::{
+    MAX_PACKET_DATA_BYTES, MAX_SAFE_CAPTURED_LENGTH, PacketRecordMetadata, PcapReader,
+    RECORD_HEADER_LEN,
+};
 pub use timestamp::Timestamp;
 pub use warning::{CaptureWarning, WarningCode, WarningCollector};

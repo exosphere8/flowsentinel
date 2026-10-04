@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/api-server", "crates/capture", "crates/cli"]
+members = ["crates/api-server", "crates/capture", "crates/cli", "crates/decoder"]
+# Built separately with a nightly toolchain; see fuzz/README.md.
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +16,7 @@ publish = false
 [workspace.dependencies]
 # Workspace crates
 capture = { path = "crates/capture" }
+decoder = { path = "crates/decoder" }
 
 # Third-party crates
 axum = "0.8.9"

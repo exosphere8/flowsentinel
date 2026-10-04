@@ -44,3 +44,17 @@ in any output. Timestamps start at 2026-01-01T00:00:00Z.
 | `truncated-record-header.pcap` | 1 packet, then 7 stray bytes | `truncated_record_header` |
 | `truncated-record-data.pcap` | Second record declares 79 bytes, has 10 | `truncated_record_data` |
 | `huge-captured-length.pcap` | Second record declares `0xFFFFFFF0` bytes | `unsafe_captured_length` |
+
+### Decoder fixtures
+
+These exercise `inspect --decode`. IPv6 packets use `2001:db8::a00` and `2001:db8::1400`
+(RFC 3849 documentation prefix). Transport ports are 9 (discard) and 40000+, so later
+application-protocol decoders leave them alone. Packets are 10 ms apart.
+
+| File | Contents | Expected decode |
+| --- | --- | --- |
+| `decode-ipv4.pcap` | ARP request/reply, UDP, TCP handshake/data/FIN, ICMP echo, 802.1Q, QinQ, two IPv4 fragments | 14 x `complete` |
+| `decode-ipv6.pcap` | UDP, TCP, ICMPv6 echo and neighbor solicitation, extension-header chain, fragments, ESP, no-next-header | ESP packet `unsupported`, others `complete` |
+| `decode-unsupported.pcap` | LLDP, 802.3/LLC, GRE, three VLAN tags, valid UDP | 4 x `unsupported`, then `complete` |
+| `decode-malformed.pcap` | One broken header or lying length per packet (two cut by the snapshot length), then a valid UDP packet | `truncated`/`malformed`, last packet `complete` |
+| `decode-raw-linktype.pcap` | `LINKTYPE_RAW` (101) | 2 x `unsupported` (link type) |
