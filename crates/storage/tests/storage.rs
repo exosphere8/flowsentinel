@@ -3,13 +3,16 @@
 
 use std::path::{Path, PathBuf};
 
-use analysis::{Analysis, AnalysisConfig, analyze_file, replay_packets};
+use analysis::{
+    Analysis, AnalysisConfig, analyze_file, analyze_file_with_detection, replay_packets,
+};
 use capture::MonotonicClock;
+use detection_engine::{AlertStatus, DetectionConfig, Detector};
 use sqlx::{Postgres, QueryBuilder};
 use storage::testing::TestDatabase;
 use storage::{
-    FlowSort, ImportMeta, PacketRow, PacketSort, Page, RetentionSettings, SessionDetail,
-    SessionSort, SqlCondition, Storage,
+    AlertFilter, AlertSort, FlowSort, ImportMeta, PacketRow, PacketSort, Page, RetentionSettings,
+    SessionDetail, SessionSort, SqlCondition, Storage,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -388,5 +391,139 @@ async fn migrations_are_idempotent() {
     };
     db.storage.migrate().await.unwrap();
     db.storage.ping().await.unwrap();
+    db.drop_database().await;
+}
+
+#[tokio::test]
+async fn alerts_are_stored_with_flow_links_and_triage() {
+    let Some(db) = TestDatabase::create("alerts").await else {
+        return;
+    };
+    let s = &db.storage;
+    let path = fixture("detect-mixed.pcap");
+    let config = AnalysisConfig::default();
+    let detector = Detector::new(DetectionConfig::default()).unwrap();
+    let analysis =
+        analyze_file_with_detection(&path, &config, detector, &MonotonicClock::start()).unwrap();
+    let mut tx = s
+        .begin_import(&analysis, &meta("detect-mixed.pcap"))
+        .await
+        .unwrap();
+    for batch in replay(&path, &config, &analysis) {
+        tx.add_packets(batch).await.unwrap();
+    }
+    let session = tx.commit(s).await.unwrap();
+    let id = session.session.id;
+    assert_eq!(session.session.alerts_total, 5);
+    assert_eq!(session.detection_summary["alerts_total"], 5);
+    assert_eq!(session.detection_summary["flows_evaluated"], 47);
+
+    let all = s
+        .list_alerts(id, Page::new(1, 50), AlertSort::Id, &AlertFilter::default())
+        .await
+        .unwrap();
+    assert_eq!(all.total, 5);
+    let ids: Vec<i64> = all.items.iter().map(|a| a.alert_id).collect();
+    assert_eq!(ids, [1, 2, 3, 4, 5]);
+    let scan = &all.items[0];
+    assert_eq!(scan.rule_id, "FS-SCAN-SYN");
+    assert_eq!(scan.source.as_deref(), Some("192.0.2.66"));
+    assert_eq!(scan.related_flow_ids.len(), 25);
+    assert!(scan.first_seen.as_deref().is_some_and(|t| t.ends_with('Z')));
+    assert_eq!(
+        scan.evidence[0]["name"],
+        "distinct_ports_unanswered_or_refused"
+    );
+    let tunnel = all
+        .items
+        .iter()
+        .find(|a| a.rule_id == "FS-DNS-TUNNEL")
+        .unwrap();
+    assert_eq!(tunnel.related_packet_indexes.len(), 12);
+    // DNS alerts also cite the flows of the queries they cite.
+    assert_eq!(tunnel.related_flow_ids.len(), 12);
+
+    let by_severity = s
+        .list_alerts(
+            id,
+            Page::new(1, 50),
+            AlertSort::Severity,
+            &AlertFilter::default(),
+        )
+        .await
+        .unwrap();
+    let severities: Vec<&str> = by_severity
+        .items
+        .iter()
+        .map(|a| a.severity.as_str())
+        .collect();
+    assert_eq!(severities, ["high", "high", "medium", "medium", "low"]);
+    let medium = s
+        .list_alerts(
+            id,
+            Page::new(1, 50),
+            AlertSort::Time,
+            &AlertFilter {
+                severity: Some("medium".to_owned()),
+                ..AlertFilter::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(medium.total, 2);
+    // A value that is not a rule matches nothing and is never interpolated.
+    let injected = s
+        .list_alerts(
+            id,
+            Page::new(1, 50),
+            AlertSort::Id,
+            &AlertFilter {
+                rule_id: Some("x' OR '1'='1".to_owned()),
+                ..AlertFilter::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(injected.total, 0);
+
+    // Linked flows carry the alert count and highest severity.
+    for flow_id in &scan.related_flow_ids {
+        let flow = s.get_flow(id, *flow_id).await.unwrap().unwrap();
+        assert!(flow.summary.alert_count >= 1);
+        assert!(flow.summary.max_alert_severity.is_some());
+    }
+    let quiet = s.get_flow(id, 1).await.unwrap().unwrap();
+    assert_eq!(quiet.summary.alert_count, 0);
+    assert_eq!(quiet.summary.max_alert_severity, None);
+
+    // Triage changes only the status.
+    let updated = s
+        .set_alert_status(id, 1, AlertStatus::Acknowledged)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(updated.status, "acknowledged");
+    assert!(updated.status_changed_at.is_some());
+    assert_eq!(updated.evidence, scan.evidence);
+    assert!(
+        s.set_alert_status(id, 99, AlertStatus::Resolved)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        s.set_alert_status(id + 1, 1, AlertStatus::Resolved)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // Deleting the capture deletes its alerts.
+    assert!(s.delete_session(id).await.unwrap());
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM alerts")
+        .fetch_one(s.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
     db.drop_database().await;
 }

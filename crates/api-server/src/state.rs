@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use capture::CaptureLimits;
+use detection_engine::DetectionConfig;
 use flow_engine::FlowConfig;
 use storage::Storage;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -29,6 +30,8 @@ pub struct ApiConfig {
     pub flow_config: FlowConfig,
     /// Accepted `Host` header values.
     pub host_policy: HostPolicy,
+    /// Validated rule thresholds, applied to every import.
+    pub detection: DetectionConfig,
 }
 
 /// State shared by all handlers.

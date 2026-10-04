@@ -20,6 +20,7 @@ Requires only the Python 3 standard library.
 
 from __future__ import annotations
 
+import hashlib
 import struct
 from pathlib import Path
 
@@ -541,6 +542,73 @@ def flow_fixtures() -> dict[str, bytes]:
     return {"flows-mixed.pcap": capture_timed(frames)}
 
 
+
+# --- Detection fixture (Milestone 7) ----------------------------------------
+
+SCANNER = bytes([192, 0, 2, 66])
+TELNET_SERVER = bytes([198, 51, 100, 23])
+BEACON_SERVER = bytes([203, 0, 113, 80])
+
+
+def detection_fixtures() -> dict[str, bytes]:
+    """Normal traffic plus one example of several patterns the detection rules
+    look for: a SYN scan, a Telnet session, DNS tunneling, an ARP conflict and
+    regular beaconing. All synthetic; payloads are the marker string."""
+
+    def t4(src, dst, sport, dport, flags, seq, ack=0, payload=b""):
+        return eth(0x0800, ipv4(6, tcp(sport, dport, flags, seq, ack, payload), src=src, dst=dst))
+
+    def session(at, src, dst, sport, dport):
+        data = PAYLOAD_MARKER
+        return [
+            (at, t4(src, dst, sport, dport, TCP_SYN, 100)),
+            (at + 0.001, t4(dst, src, dport, sport, TCP_SYN | TCP_ACK, 500, 101)),
+            (at + 0.002, t4(src, dst, sport, dport, TCP_ACK, 101, 501)),
+            (at + 0.003, t4(src, dst, sport, dport, TCP_PSH | TCP_ACK, 101, 501, data)),
+            (at + 0.004, t4(dst, src, dport, sport, TCP_PSH | TCP_ACK, 501, 101 + len(data), data)),
+            (at + 0.005, t4(src, dst, sport, dport, TCP_FIN | TCP_ACK, 101 + len(data), 501 + len(data))),
+            (at + 0.006, t4(dst, src, dport, sport, TCP_FIN | TCP_ACK, 501 + len(data), 102 + len(data))),
+            (at + 0.007, t4(src, dst, sport, dport, TCP_ACK, 102 + len(data), 502 + len(data))),
+        ]
+
+    def arp_reply(mac: bytes, sender_ip: bytes, target_ip: bytes) -> bytes:
+        body = struct.pack("!HHBBH", 1, 0x0800, 6, 4, 2) + mac + sender_ip + MAC_A + target_ip
+        return eth(0x0806, body, src=mac, dst=MAC_A)
+
+    frames = []
+    # Normal: a DNS lookup and an HTTPS connection. No rule should fire.
+    query = dns_header(0x0D01, 0x0100, 1, 0) + dns_question("www.example.com", 1)
+    answer = (
+        dns_header(0x0D01, 0x8180, 1, 1)
+        + dns_question("www.example.com", 1)
+        + dns_rr(b"\xc0\x0c", 1, 300, WEB_SERVER)
+    )
+    frames += [(0.0, udp_ip(IP_A, DNS_SERVER, 53000, 53, query)),
+               (0.01, udp_ip(DNS_SERVER, IP_A, 53, 53000, answer))]
+    frames += session(0.1, IP_A, WEB_SERVER, 41000, 443)
+    # SYN scan: 25 ports on one host, each refused with RST.
+    for i, port in enumerate(range(1, 26)):
+        at = 1.0 + i * 0.01
+        frames += [(at, t4(SCANNER, IP_B, 60000 + i, port, TCP_SYN, 7000 + i)),
+                   (at + 0.001, t4(IP_B, SCANNER, port, 60000 + i, TCP_RST | TCP_ACK, 0, 7001 + i))]
+    # Cleartext login protocol: an answered Telnet session.
+    frames += session(2.0, IP_A, TELNET_SERVER, 41100, 23)
+    # DNS tunneling: long, high-entropy TXT queries under one parent domain.
+    for i in range(12):
+        label = hashlib.sha256(b"flowsentinel-tunnel-%d" % i).hexdigest()
+        name = f"{label[:40]}.{label[40:]}.tunnel.example"
+        q = dns_header(0x7000 + i, 0x0100, 1, 0) + dns_question(name, 16)
+        frames.append((3.0 + i * 0.5, udp_ip(IP_A, DNS_SERVER, 53100 + i, 53, q)))
+    # ARP conflict: the gateway address claimed by two MAC addresses.
+    frames += [(10.0, arp_reply(bytes([2, 0, 0, 0, 0, 0x11]), GATEWAY, IP_A)),
+               (11.0, arp_reply(bytes([2, 0, 0, 0, 0, 0x66]), GATEWAY, IP_A))]
+    # Beaconing: a connection to the same host and port every 60 seconds.
+    for i in range(7):
+        frames += session(20.0 + i * 60.0, IP_A, BEACON_SERVER, 42000 + i, 8443)
+    frames.sort(key=lambda f: f[0])
+    return {"detect-mixed.pcap": capture_timed(frames)}
+
+
 def fixtures() -> dict[str, bytes]:
     le, be = "<", ">"
     files: dict[str, bytes] = {}
@@ -593,6 +661,7 @@ def fixtures() -> dict[str, bytes]:
     files.update(decode_fixtures())
     files.update(application_fixtures())
     files.update(flow_fixtures())
+    files.update(detection_fixtures())
     return files
 
 

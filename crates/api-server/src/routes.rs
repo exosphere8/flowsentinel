@@ -3,20 +3,21 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use analysis::{AnalysisConfig, analyze_file, replay_packets};
+use analysis::{AnalysisConfig, analyze_file_with_detection, replay_packets};
 use axum::Json;
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use capture::{CaptureError, ErrorCategory, MonotonicClock, display_file_name};
+use detection_engine::{AlertStatus, Detector, NATURE, RULES};
 use filter_language::{CompiledFilter, FieldType, Param, Piece, Target, compile};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder};
 use storage::{
-    DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent, ImportMeta, PacketDetail, PacketRow,
-    PacketSort, PacketSummary, Page, Paged, RetentionSettings, Session, SessionDetail, SessionSort,
-    SqlCondition, StorageError, TlsEvent,
+    AlertFilter, AlertRow, AlertSort, DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent,
+    ImportMeta, PacketDetail, PacketRow, PacketSort, PacketSummary, Page, Paged, RetentionSettings,
+    Session, SessionDetail, SessionSort, SqlCondition, StorageError, TlsEvent,
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -116,6 +117,51 @@ pub struct FlowListParams {
 #[derive(Debug, Deserialize, IntoParams)]
 #[serde(deny_unknown_fields)]
 #[into_params(parameter_in = Query)]
+pub struct AlertListParams {
+    /// 1-based page number (default 1, at most 1000000).
+    pub page: Option<u32>,
+    /// Items per page, 1-500 (default 50).
+    pub per_page: Option<u32>,
+    /// `severity` (default: most severe first), `time` or `id`.
+    pub sort: Option<String>,
+    /// Only alerts of this severity: `low`, `medium` or `high`.
+    pub severity: Option<String>,
+    /// Only alerts with this status: `open`, `acknowledged`, `resolved` or
+    /// `false_positive`.
+    pub status: Option<String>,
+    /// Only alerts of this rule, for example `FS-SCAN-SYN`.
+    pub rule: Option<String>,
+}
+
+/// A triage status change.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AlertUpdate {
+    /// `open`, `acknowledged`, `resolved` or `false_positive`.
+    pub status: String,
+}
+
+/// One detection rule.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RuleInfo {
+    /// Stable identifier, for example `FS-SCAN-SYN`.
+    pub id: &'static str,
+    pub name: &'static str,
+    /// `low`, `medium` or `high`.
+    pub severity: &'static str,
+    pub description: &'static str,
+    /// Why an alert from this rule may be wrong.
+    pub uncertainty: &'static str,
+    pub likely_false_positives: Vec<&'static str>,
+    /// MITRE ATT&CK techniques the pattern can relate to, as context only.
+    pub mitre_attack: Vec<&'static str>,
+    /// Every alert is a heuristic indicator, not proof of compromise.
+    pub nature: &'static str,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+#[serde(deny_unknown_fields)]
+#[into_params(parameter_in = Query)]
 pub struct FilterParams {
     /// `packets` or `flows`.
     pub target: String,
@@ -191,6 +237,60 @@ fn packet_sort(value: Option<&str>) -> Result<PacketSort, ApiError> {
         Some("time") => PacketSort::Time,
         Some("-length") => PacketSort::LengthDesc,
         Some(_) => return Err(invalid_sort("index, -index, time, -length")),
+    })
+}
+
+fn alert_sort(value: Option<&str>) -> Result<AlertSort, ApiError> {
+    Ok(match value {
+        None | Some("severity") => AlertSort::Severity,
+        Some("time") => AlertSort::Time,
+        Some("id") => AlertSort::Id,
+        Some(_) => return Err(invalid_sort("severity, time, id")),
+    })
+}
+
+fn alert_status(value: &str) -> Result<AlertStatus, ApiError> {
+    AlertStatus::parse(value).ok_or_else(|| {
+        ApiError::bad_request(
+            "invalid_status",
+            "status must be one of: open, acknowledged, resolved, false_positive",
+        )
+    })
+}
+
+/// Validates the alert list restrictions against the fixed sets of values.
+fn alert_filter(params: &AlertListParams) -> Result<AlertFilter, ApiError> {
+    let severity = match params.severity.as_deref() {
+        None => None,
+        Some(value @ ("low" | "medium" | "high")) => Some(value.to_owned()),
+        Some(_) => {
+            return Err(ApiError::bad_request(
+                "invalid_severity",
+                "severity must be one of: low, medium, high",
+            ));
+        }
+    };
+    let status = params
+        .status
+        .as_deref()
+        .map(|value| alert_status(value).map(|s| s.as_str().to_owned()))
+        .transpose()?;
+    let rule_id = match params.rule.as_deref() {
+        None => None,
+        Some(value) => match RULES.iter().find(|rule| rule.id == value) {
+            Some(rule) => Some(rule.id.to_owned()),
+            None => {
+                return Err(ApiError::bad_request(
+                    "invalid_rule",
+                    "rule must be a rule ID from GET /api/v1/rules",
+                ));
+            }
+        },
+    };
+    Ok(AlertFilter {
+        severity,
+        status,
+        rule_id,
     })
 }
 
@@ -433,13 +533,16 @@ pub async fn import_capture(
     };
     let path: PathBuf = received.file.path().to_owned();
     let temp_name = display_file_name(&path);
+    // The configuration was validated at startup.
+    let detector = Detector::new(state.config.detection.clone())
+        .map_err(|e| ApiError::internal("detection configuration", &e))?;
 
-    // Pass 1: summaries and flows.
+    // Pass 1: summaries, flows and detections.
     let first_path = path.clone();
     let held = Arc::clone(&permit);
     let analysis = tokio::task::spawn_blocking(move || {
         let _held = held;
-        analyze_file(&first_path, &config, &MonotonicClock::start())
+        analyze_file_with_detection(&first_path, &config, detector, &MonotonicClock::start())
     })
     .await
     .map_err(|e| ApiError::internal("analysis task", &e))?
@@ -507,6 +610,7 @@ pub async fn import_capture(
         packets = session.session.packets_processed,
         packets_stored = session.session.packets_stored,
         flows = session.session.flows_total,
+        alerts = session.session.alerts_total,
         size_bytes = received.size_bytes,
         "capture imported"
     );
@@ -791,6 +895,124 @@ pub async fn list_tls(
     Ok(Json(state.storage.list_tls_events(id, page).await?))
 }
 
+/// List a capture's alerts.
+///
+/// Alerts are heuristic indicators that deserve review, not proof of
+/// compromise. Each carries its evidence, its uncertainty and likely false
+/// positives.
+#[utoipa::path(
+    get,
+    path = "/api/v1/captures/{id}/alerts",
+    tag = "alerts",
+    params(("id" = i64, Path, description = "Capture ID"), AlertListParams),
+    responses(
+        (status = 200, description = "A page of alerts", body = Paged<AlertRow>),
+        (status = 400, description = "Invalid query", body = ErrorResponse),
+        (status = 404, description = "Capture not found", body = ErrorResponse),
+    )
+)]
+pub async fn list_alerts(
+    State(state): State<AppState>,
+    ApiPath(id): ApiPath<i64>,
+    ApiQuery(params): ApiQuery<AlertListParams>,
+) -> Result<Json<Paged<AlertRow>>, ApiError> {
+    let page = page_of(params.page, params.per_page)?;
+    let sort = alert_sort(params.sort.as_deref())?;
+    let filter = alert_filter(&params)?;
+    require_session(&state, id).await?;
+    Ok(Json(
+        state.storage.list_alerts(id, page, sort, &filter).await?,
+    ))
+}
+
+/// Get one alert with its evidence.
+#[utoipa::path(
+    get,
+    path = "/api/v1/captures/{id}/alerts/{alert_id}",
+    tag = "alerts",
+    params(
+        ("id" = i64, Path, description = "Capture ID"),
+        ("alert_id" = i64, Path, description = "Alert ID within the capture"),
+    ),
+    responses(
+        (status = 200, description = "The alert", body = AlertRow),
+        (status = 404, description = "Not found", body = ErrorResponse),
+    )
+)]
+pub async fn get_alert(
+    State(state): State<AppState>,
+    ApiPath((id, alert_id)): ApiPath<(i64, i64)>,
+) -> Result<Json<AlertRow>, ApiError> {
+    state
+        .storage
+        .get_alert(id, alert_id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("alert"))
+}
+
+/// Change an alert's triage status. Nothing else about an alert can change.
+#[utoipa::path(
+    patch,
+    path = "/api/v1/captures/{id}/alerts/{alert_id}",
+    tag = "alerts",
+    params(
+        ("id" = i64, Path, description = "Capture ID"),
+        ("alert_id" = i64, Path, description = "Alert ID within the capture"),
+    ),
+    request_body = AlertUpdate,
+    responses(
+        (status = 200, description = "The updated alert", body = AlertRow),
+        (status = 400, description = "Invalid status", body = ErrorResponse),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 422, description = "Malformed body", body = ErrorResponse),
+    )
+)]
+pub async fn update_alert(
+    State(state): State<AppState>,
+    ApiPath((id, alert_id)): ApiPath<(i64, i64)>,
+    ApiJson(update): ApiJson<AlertUpdate>,
+) -> Result<Json<AlertRow>, ApiError> {
+    let status = alert_status(&update.status)?;
+    let alert = state
+        .storage
+        .set_alert_status(id, alert_id, status)
+        .await?
+        .ok_or_else(|| ApiError::not_found("alert"))?;
+    tracing::info!(
+        session_id = id,
+        alert_id,
+        status = status.as_str(),
+        "alert status changed"
+    );
+    Ok(Json(alert))
+}
+
+/// List the detection rules.
+#[utoipa::path(
+    get,
+    path = "/api/v1/rules",
+    tag = "alerts",
+    responses((status = 200, description = "The rule catalog", body = Vec<RuleInfo>))
+)]
+pub async fn list_rules() -> Json<Vec<RuleInfo>> {
+    Json(
+        RULES
+            .iter()
+            .map(|rule| RuleInfo {
+                id: rule.id,
+                name: rule.name,
+                severity: rule.severity.as_str(),
+                description: rule.description,
+                uncertainty: rule.uncertainty,
+                likely_false_positives: rule.likely_false_positives.to_vec(),
+                mitre_attack: rule.mitre_attack.to_vec(),
+                nature: NATURE,
+            })
+            .collect(),
+    )
+}
+
 /// Check a display filter without running it.
 #[utoipa::path(
     get,
@@ -935,6 +1157,37 @@ mod tests {
         assert!(packet_sort(Some("index; DROP TABLE packets")).is_err());
         assert_eq!(flow_sort(Some("-bytes")).unwrap(), FlowSort::BytesDesc);
         assert_eq!(session_sort(None).unwrap(), SessionSort::NewestFirst);
+        assert_eq!(alert_sort(Some("time")).unwrap(), AlertSort::Time);
+        assert!(alert_sort(Some("severity_rank")).is_err());
+    }
+
+    #[test]
+    fn alert_filters_are_a_fixed_set() {
+        let params =
+            |severity: Option<&str>, status: Option<&str>, rule: Option<&str>| AlertListParams {
+                page: None,
+                per_page: None,
+                sort: None,
+                severity: severity.map(str::to_owned),
+                status: status.map(str::to_owned),
+                rule: rule.map(str::to_owned),
+            };
+        let ok = alert_filter(&params(
+            Some("high"),
+            Some("false_positive"),
+            Some("FS-BEACON"),
+        ))
+        .unwrap();
+        assert_eq!(ok.severity.as_deref(), Some("high"));
+        assert_eq!(ok.status.as_deref(), Some("false_positive"));
+        assert_eq!(ok.rule_id.as_deref(), Some("FS-BEACON"));
+        for (bad, code) in [
+            (params(Some("HIGH"), None, None), "invalid_severity"),
+            (params(None, Some("closed"), None), "invalid_status"),
+            (params(None, None, Some("FS-NOPE' OR 1=1")), "invalid_rule"),
+        ] {
+            assert_eq!(alert_filter(&bad).unwrap_err().code, code);
+        }
     }
 
     #[test]

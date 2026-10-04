@@ -79,3 +79,9 @@ in output.
 | File | Contents |
 | --- | --- |
 | `flows-mixed.pcap` | A DNS lookup; a TLS connection to the resolved address with handshake, a duplicate segment and FIN both ways; a refused connection (SYN, RST); an IPv6 UDP exchange whose reply has an earlier timestamp; an ARP request; a UDP conversation that idles out and restarts 90 seconds later. Expected: 6 flows (`idle_timeout` 3, `tcp_finished` 2, `capture_end` 1). |
+
+### Detection fixture
+
+| File | Contents |
+| --- | --- |
+| `detect-mixed.pcap` | 138 packets, 47 flows. Ordinary traffic (a DNS lookup and an HTTPS session) plus one instance of each pattern: 192.0.2.66 sends SYNs to 25 ports of 198.51.100.20 and is refused; an answered Telnet session to 198.51.100.23; 12 long TXT queries under `tunnel.example`; two MAC addresses claiming 192.0.2.1 in ARP replies; seven connections from 192.0.2.10 to 203.0.113.80:8443, 60 seconds apart. Payloads are the synthetic marker string. Expected: exactly five alerts, `FS-SCAN-SYN`, `FS-BEACON`, `FS-CLEARTEXT`, `FS-DNS-TUNNEL` and `FS-ARP-CONFLICT`. |

@@ -35,14 +35,15 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 6)
+## Current security posture (Milestone 7)
 
 - The API binds to `127.0.0.1` by default and has **no authentication yet**. Anyone who can reach
-  it can import, read and delete captures and change retention. Do not expose it to a network.
+  it can import, read and delete captures, change alert statuses and change retention. Do not
+  expose it to a network.
   The server logs a warning if configured to listen on a non-loopback address.
 - The API sends no CORS headers, and every state-changing request needs a non-simple content
   type (uploads require `application/vnd.tcpdump.pcap` or `application/octet-stream`) or method
-  (`PUT`, `DELETE`). Browsers therefore block cross-site requests to it from other origins.
+  (`PUT`, `PATCH`, `DELETE`). Browsers therefore block cross-site requests to it from other origins.
   Requests whose `Host` header is not a name of the server (by default only loopback names) are
   refused with `421`, which stops DNS-rebinding pages from reaching a loopback API; set
   `FLOWSENTINEL_ALLOWED_HOSTS` when clients use another name. CSRF protection and sessions
@@ -106,6 +107,17 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   crafted to create millions of flows therefore causes evictions and uncounted records, not
   unbounded memory. Flows are timed by an internal clock that ignores a lone timestamp more than
   a day off, so a corrupt record cannot end, freeze or immortalize flows. Details: [docs/flow-engine.md](docs/flow-engine.md).
+- Detection rules (`flowsentinel detect` and API imports) read decoded metadata and flow records
+  only. Alerts are described everywhere as **heuristic indicators, not proof of compromise**;
+  each carries its evidence, uncertainty and likely false positives, and ATT&CK techniques are
+  context tags, never claims. Rules are passive: no lookups, probing or blocking. Their state is
+  bounded against crafted captures (per-key, per-rule and per-alert limits, windows that give
+  memory back as events expire, least-recent keys evicted when a table is full, alerts per rule
+  capped at 1,000 before they are built, subdomains held as digests, a time base that a lone
+  corrupt timestamp cannot move), and events or keys over a limit are counted, not silently lost. The detection configuration is
+  size-limited, rejects unknown keys and is range-checked; the API refuses to start with an
+  invalid one. Only an alert's status can be changed through the API. Details:
+  [docs/detection-rules.md](docs/detection-rules.md).
 
 Later milestones add authentication and RBAC (9), audit logging (9), further upload and
 container hardening and TLS to the database (11), and dependency auditing, secret scanning and

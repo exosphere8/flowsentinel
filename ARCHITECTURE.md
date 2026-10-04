@@ -15,7 +15,7 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 6)
+## Current components (Milestone 7)
 
 ```
   curl / client --HTTP--> +--------------------+  /health, /api/v1/... (JSON, OpenAPI)
@@ -24,15 +24,17 @@ will live. It is updated at the end of every milestone.
                                |           |  SQL (parameterized, one transaction per import)
             spawn_blocking     |      +----v-----+
                                |      | storage  |--> PostgreSQL 16 (sessions, packets, flows,
-                               |      +----^-----+     DNS/HTTP/TLS events, retention)
+                               |      +----^-----+     alerts, DNS/HTTP/TLS events, retention)
                           +----v-----+     |  PacketRow batches (bounded queue)
-  shell --> cli --------> | analysis |-----+   pass 1: summaries + flows + fingerprint
+  shell --> cli --------> | analysis |-----+   pass 1: summaries + flows + alerts + fingerprint
             (inspect,     +----+-----+         pass 2: packets with flow IDs, in batches
-             flows)            |
-                +--------------v--------------------------------+
-                | capture -> decoder -> flow-engine             |  PacketSink: borrowed bytes,
-                | (limits)   (layers)    (FlowRecord)           |  one packet at a time
-                +-----------------------------------------------+
+             flows,            |
+             detect)           |
+                +--------------v-----------------------------------------------------+
+                | capture -> decoder -> flow-engine ---------> detection-engine       |
+                | (limits)   (layers)    (FlowRecord)  finish   (rules -> Alert)       |
+                |               \________ DNS/ARP layers ______^                     |
+                +--------------------------------------------------------------------+
 
   docker compose: PostgreSQL 16 (used by the API), Redis 7 (started; not yet used)
 ```
@@ -43,9 +45,10 @@ will live. It is updated at the end of every milestone.
   plus `/api/v1`). Keeping them in a library lets tests drive the real router in-process
   (`tower::ServiceExt::oneshot`) and over a real socket. See [docs/api.md](docs/api.md).
 - `main.rs` initializes structured JSON logging (`tracing-subscriber`) and loads configuration
-  from the environment. It connects to PostgreSQL, applies migrations, starts the hourly
-  retention purge, binds the listener and serves with graceful shutdown on Ctrl+C or SIGTERM. It
-  refuses to start without a valid `FLOWSENTINEL_DATABASE_URL`. The URL is never logged:
+  from the environment, including the detection thresholds (`FLOWSENTINEL_DETECTION_CONFIG`). It
+  connects to PostgreSQL, applies migrations, starts the hourly retention purge, binds the
+  listener and serves with graceful shutdown on Ctrl+C or SIGTERM. It refuses to start without a
+  valid `FLOWSENTINEL_DATABASE_URL` or with an invalid detection configuration. The URL is never logged:
   `Config`'s `Debug` output redacts it.
 - `routes.rs` holds the handlers, annotated for `utoipa`; `openapi.rs` assembles the OpenAPI
   document. `extract.rs` wraps axum's `Query`, `Path` and `Json` extractors so malformed requests
@@ -69,6 +72,8 @@ will live. It is updated at the end of every milestone.
 The pipeline shared by front ends. `analyze_file` reads a capture once through
 `capture → decoder → flow-engine`. It keeps the report without per-record data, the decode
 summary, the finished flows, and a fingerprint of the packets that will be replayed.
+`analyze_file_with_detection` also feeds every decoded packet to a `Detector` and hands it the
+finished flows, so the rules cost no extra pass.
 `replay_packets` reads the first N packets again and replays the deterministic flow engine to
 recover each packet's flow ID. It yields packets in batches and fingerprints what it read; the
 caller compares the fingerprints and discards the result if the file changed.
@@ -82,13 +87,34 @@ PostgreSQL persistence with SQLx. See [docs/data-retention.md](docs/data-retenti
 - Every query is parameterized. Sort orders are enums that map to fixed SQL fragments. Extra
   `WHERE` conditions come through the `SqlCondition` trait, whose implementations push only fixed
   SQL text and bind every value.
-- `ImportTransaction` writes a capture in one transaction: `begin_import` inserts the session and
-  flows, `add_packets` inserts packet batches and their DNS/HTTP/TLS events, and `commit`
+- `ImportTransaction` writes a capture in one transaction: `begin_import` inserts the session,
+  flows (with their alert count and highest severity) and alerts, `add_packets` inserts packet batches and their DNS/HTTP/TLS events, and `commit`
   publishes them. Dropping it rolls everything back.
 - `PacketRow::from_analyzed` extracts indexed columns and serializes metadata to JSON text off the
   async runtime; `add_packets` moves the rows into the insert, so metadata is never copied.
 - Feature `test-support` provides `testing::TestDatabase`, a migrated database created per test
   and dropped afterwards, even if the test panics.
+
+### `crates/detection-engine`
+
+Explainable heuristics (see [docs/detection-rules.md](docs/detection-rules.md)). Every alert is
+a heuristic indicator, never a verdict, and carries its evidence, cited flows or packets,
+uncertainty, likely false positives and ATT&CK context.
+
+- `model.rs` defines `Alert`, `Severity`, `Confidence`, `AlertStatus`, `Evidence` and the fixed
+  rule catalog `RULES`: twelve `Rule`s with stable IDs and their descriptions.
+- `config.rs` holds `DetectionConfig` (TOML, unknown keys rejected, every value range-checked,
+  files at most 64 KiB) with one section per rule.
+- `packets.rs` evaluates DNS and ARP packets as they arrive (`Detector::observe_packet`).
+  `window.rs` provides the sliding windows: per key at most 4,096 events, per rule at most
+  16,384 keys and 131,072 events, with sweeps of expired keys driven by a clock that a lone
+  outlier timestamp cannot move.
+- `flows.rs` evaluates the finished flows (`Detector::finish`): windowed distinct counts for
+  scans and failures, interval statistics for beaconing, and per-capture rarity, ratio and port
+  checks.
+- `finish` numbers alerts in catalog order and then by time, keeps at most 1,000 per rule, and
+  records alert IDs on the cited flows. Results are deterministic.
+- Depends on `capture`, `decoder` and `flow-engine` only; it reads metadata, never packet bytes.
 
 ### `crates/filter-language`
 
@@ -97,7 +123,8 @@ database dependency.
 
 - `lexer.rs` turns text into tokens with byte spans (length and token limits). `parser.rs` builds
   an `Expr` tree by recursive descent (depth and clause limits). `fields.rs` is the fixed catalog
-  of packet and flow fields: type, SQL column or predicate, and optional guard.
+  of packet and flow fields (including the flow's alert facts): type, SQL column or predicate,
+  and optional guard.
 - `translate.rs` type-checks each comparison against the catalog and emits `Piece`s: `Sql` holds
   a `'static` fragment from the catalog or the translator, and `Param` holds a typed value. User
   text can only ever become a `Param`.
@@ -199,8 +226,9 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
   again and writes each row, tree or JSON element as soon as it is decoded, so the summaries can
   be printed first without keeping any packet.
 - `flows` decodes each packet in one pass, feeds it to a `FlowEngine` and prints the finished
-  flows as a table or one JSON object. `inspect` and `flows` share the capture flags through a
-  flattened `CaptureArgs`.
+  flows as a table or one JSON object. `detect` runs `analyze_file_with_detection` and prints the
+  alerts with their explanations, or one JSON object. The commands share the capture flags
+  through a flattened `CaptureArgs`.
 
 ### Infrastructure
 
@@ -214,7 +242,6 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `detection-engine` | 7 | Configurable, explainable heuristics over flows and metadata |
 | `frontend/` | 8 | React + TypeScript dashboard |
 
 Data will flow in one direction:

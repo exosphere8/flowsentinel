@@ -12,6 +12,7 @@ publish.workspace = true
 [dependencies]
 capture.workspace = true
 decoder.workspace = true
+detection-engine.workspace = true
 flow-engine.workspace = true
 
 [dev-dependencies]

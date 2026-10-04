@@ -22,18 +22,21 @@ Unit and integration tests live next to the code they cover:
 | `crates/flow-engine/src/*.rs` | Flow keys, running statistics |
 | `crates/flow-engine/tests/flows.rs` | Direction, initiator inference, TCP states, expiry, eviction, retention, statistics, timestamps, determinism; property test that packet and byte totals are conserved |
 | `crates/cli/tests/flows.rs` | `flowsentinel flows` against `flows-mixed.pcap`: every flow, sorting, limits, exit codes, payload privacy |
-| `crates/analysis/tests/pipeline.rs` | Both analysis passes agree; packets carry flow IDs; a file changed between passes is detected |
 | `crates/api-server/src/*.rs` | Configuration parsing, `Host` checks, upload rate and stale-file cleanup |
+| `crates/analysis/tests/pipeline.rs` | Both analysis passes agree; packets carry flow IDs; a file changed between passes is detected; detection runs in the first pass and links alerts to flows |
+| `crates/filter-language/src/*.rs` | Lexer, parser precedence and limits, translation, type errors with positions, injection attempts, catalog documented |
+| `crates/filter-language/tests/properties.rs` | Property tests: arbitrary text never panics; generated filters compile and round-trip; quoted text is always one parameter |
+| `crates/detection-engine/src/*.rs` | Configuration parsing and ranges (the example file equals the defaults), sliding windows: limits, sweeps, outlier and backward-jump handling |
+| `crates/detection-engine/tests/rules.rs` | Every rule with a matching and a benign trace, cited flows and packets, tuning and disabling, alert limits, determinism, property test that arbitrary packets never panic |
+| `crates/cli/tests/detect.rs` | `flowsentinel detect` against `detect-mixed.pcap`: the five expected alerts, human and JSON output, configuration errors, exit codes, payload privacy |
 
 Tests that need PostgreSQL create a disposable database per test (see
 [CONTRIBUTING.md](../CONTRIBUTING.md#database-tests)):
 
 | Location | What it covers |
 | --- | --- |
-| `crates/filter-language/src/*.rs` | Lexer, parser precedence and limits, translation, type errors with positions, injection attempts, catalog documented |
-| `crates/filter-language/tests/properties.rs` | Property tests: arbitrary text never panics; generated filters compile and round-trip; quoted text is always one parameter |
-| `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, no secrets stored |
-| `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, OpenAPI, no secrets in any response |
+| `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, alerts with flow links and triage, no secrets stored |
+| `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, alerts and triage, OpenAPI, no secrets in any response |
 
 This directory is reserved for end-to-end tests that span several processes, such as the
 dashboard against a running API (Milestone 8).

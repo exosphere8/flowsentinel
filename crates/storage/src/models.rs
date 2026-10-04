@@ -54,6 +54,8 @@ pub struct Session {
     /// Flows with stored records (may be fewer than the total when the flow
     /// engine's retention limit was reached).
     pub flows_stored: i64,
+    /// Alerts raised by the detection rules (heuristic indicators).
+    pub alerts_total: i64,
     /// RFC 3339, UTC.
     pub created_at: String,
     /// RFC 3339, UTC. The session and everything stored for it are deleted
@@ -72,6 +74,46 @@ pub struct SessionDetail {
     pub decode_summary: serde_json::Value,
     #[schema(value_type = Object)]
     pub flow_summary: serde_json::Value,
+    /// Alert counts by rule and severity, and what the rules evaluated.
+    #[schema(value_type = Object)]
+    pub detection_summary: serde_json::Value,
+}
+
+/// One stored alert: a heuristic indicator with its evidence. Never proof
+/// of compromise.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct AlertRow {
+    pub alert_id: i64,
+    pub rule_id: String,
+    pub rule_name: String,
+    /// `low`, `medium` or `high`.
+    pub severity: String,
+    /// `low`, `medium` or `high`.
+    pub confidence: String,
+    /// `open`, `acknowledged`, `resolved` or `false_positive`.
+    pub status: String,
+    /// Always the same statement that alerts are heuristic indicators.
+    pub nature: &'static str,
+    pub first_seen_ns: Option<i64>,
+    pub first_seen: Option<String>,
+    pub last_seen_ns: Option<i64>,
+    pub last_seen: Option<String>,
+    pub source: Option<String>,
+    pub destination: Option<String>,
+    pub destination_port: Option<i32>,
+    pub related_flow_ids: Vec<i64>,
+    pub related_packet_indexes: Vec<i64>,
+    /// `[{"name": ..., "value": ...}]`: the measured facts behind the alert.
+    #[schema(value_type = Vec<Object>)]
+    pub evidence: serde_json::Value,
+    pub explanation: String,
+    pub uncertainty: String,
+    pub likely_false_positives: Vec<String>,
+    /// MITRE ATT&CK techniques as context only; not a claim that a technique
+    /// was used.
+    pub mitre_attack: Vec<String>,
+    /// RFC 3339, UTC: when an analyst last changed the status.
+    pub status_changed_at: Option<String>,
 }
 
 /// One packet's indexed metadata.
@@ -124,6 +166,10 @@ pub struct FlowSummaryRow {
     pub tcp_state: Option<String>,
     pub end_reason: String,
     pub dominant_endpoint: String,
+    /// Alerts that cite this flow (at most 16 are linked).
+    pub alert_count: i32,
+    /// `low`, `medium` or `high`: the most severe linked alert.
+    pub max_alert_severity: Option<String>,
 }
 
 /// A flow with its full record (statistics, TCP, application metadata).

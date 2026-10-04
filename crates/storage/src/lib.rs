@@ -18,7 +18,7 @@ use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use ingest::{ImportMeta, ImportTransaction, PacketRow};
 pub use models::{
-    DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, PacketDetail, PacketSummary, Paged,
+    AlertRow, DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, PacketDetail, PacketSummary, Paged,
     RetentionSettings, Session, SessionDetail, TlsEvent, rfc3339_from_nanos,
 };
 
@@ -166,6 +166,36 @@ impl FlowSort {
     }
 }
 
+/// Alert list orders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlertSort {
+    /// Most severe first, then by ID.
+    #[default]
+    Severity,
+    /// Earliest first.
+    Time,
+    /// By ID.
+    Id,
+}
+
+impl AlertSort {
+    fn sql(self) -> &'static str {
+        match self {
+            Self::Severity => "severity_rank DESC, alert_id ASC",
+            Self::Time => "first_seen_ns ASC NULLS LAST, alert_id ASC",
+            Self::Id => "alert_id ASC",
+        }
+    }
+}
+
+/// Optional alert list restrictions; every value is bound as a parameter.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlertFilter {
+    pub severity: Option<String>,
+    pub status: Option<String>,
+    pub rule_id: Option<String>,
+}
+
 /// An extra `WHERE` condition, appended with `AND`. Implementations must
 /// push only fixed SQL text and bind every value with
 /// [`QueryBuilder::push_bind`].
@@ -213,7 +243,7 @@ const SESSION_COLUMNS: &str = concat!(
     "id, file_name, file_size_bytes, sha256, source, completion_state, pcap_version, \
      endianness, timestamp_resolution, link_type, link_type_name, snap_length, \
      packets_processed, packets_stored, captured_bytes_total, original_bytes_total, \
-     first_packet_ns, last_packet_ns, flows_total, flows_stored, ",
+     first_packet_ns, last_packet_ns, flows_total, flows_stored, alerts_total, ",
     utc_text!("created_at"),
     ", ",
     utc_text!("expires_at")
@@ -224,7 +254,8 @@ const PACKET_COLUMNS: &str = "packet_index, ts_ns, captured_length, original_len
 
 const FLOW_COLUMNS: &str = "flow_id, ip_version, protocol, protocol_name, initiator_ip, \
     initiator_port, responder_ip, responder_port, first_seen_ns, last_seen_ns, \
-    duration_seconds, packets_total, bytes_total, tcp_state, end_reason, dominant_endpoint";
+    duration_seconds, packets_total, bytes_total, tcp_state, end_reason, dominant_endpoint, \
+    alert_count, max_alert_severity";
 
 fn session_from_row(row: &PgRow) -> Result<Session, sqlx::Error> {
     let first: Option<i64> = row.try_get("first_packet_ns")?;
@@ -252,6 +283,7 @@ fn session_from_row(row: &PgRow) -> Result<Session, sqlx::Error> {
         last_packet_time: last.and_then(rfc3339_from_nanos),
         flows_total: row.try_get("flows_total")?,
         flows_stored: row.try_get("flows_stored")?,
+        alerts_total: row.try_get("alerts_total")?,
         created_at: row.try_get("created_at")?,
         expires_at: row.try_get("expires_at")?,
     })
@@ -298,7 +330,61 @@ fn flow_from_row(row: &PgRow) -> Result<FlowSummaryRow, sqlx::Error> {
         tcp_state: row.try_get("tcp_state")?,
         end_reason: row.try_get("end_reason")?,
         dominant_endpoint: row.try_get("dominant_endpoint")?,
+        alert_count: row.try_get("alert_count")?,
+        max_alert_severity: row.try_get("max_alert_severity")?,
     })
+}
+
+const ALERT_COLUMNS: &str = concat!(
+    "alert_id, rule_id, rule_name, severity, confidence, status, first_seen_ns, last_seen_ns, \
+     host(source) AS source, host(destination) AS destination, destination_port, \
+     related_flow_ids, related_packet_indexes, evidence, explanation, uncertainty, \
+     likely_false_positives, mitre_attack, ",
+    utc_text!("status_changed_at")
+);
+
+fn alert_from_row(row: &PgRow) -> Result<AlertRow, sqlx::Error> {
+    let first: Option<i64> = row.try_get("first_seen_ns")?;
+    let last: Option<i64> = row.try_get("last_seen_ns")?;
+    Ok(AlertRow {
+        alert_id: row.try_get("alert_id")?,
+        rule_id: row.try_get("rule_id")?,
+        rule_name: row.try_get("rule_name")?,
+        severity: row.try_get("severity")?,
+        confidence: row.try_get("confidence")?,
+        status: row.try_get("status")?,
+        nature: detection_engine::NATURE,
+        first_seen_ns: first,
+        first_seen: first.and_then(rfc3339_from_nanos),
+        last_seen_ns: last,
+        last_seen: last.and_then(rfc3339_from_nanos),
+        source: row.try_get("source")?,
+        destination: row.try_get("destination")?,
+        destination_port: row.try_get("destination_port")?,
+        related_flow_ids: row.try_get("related_flow_ids")?,
+        related_packet_indexes: row.try_get("related_packet_indexes")?,
+        evidence: row.try_get("evidence")?,
+        explanation: row.try_get("explanation")?,
+        uncertainty: row.try_get("uncertainty")?,
+        likely_false_positives: row.try_get("likely_false_positives")?,
+        mitre_attack: row.try_get("mitre_attack")?,
+        status_changed_at: row.try_get("status_changed_at")?,
+    })
+}
+
+fn push_alert_filter(builder: &mut QueryBuilder<'_, Postgres>, filter: &AlertFilter) {
+    if let Some(severity) = &filter.severity {
+        builder.push(" AND severity = ");
+        builder.push_bind(severity.clone());
+    }
+    if let Some(status) = &filter.status {
+        builder.push(" AND status = ");
+        builder.push_bind(status.clone());
+    }
+    if let Some(rule_id) = &filter.rule_id {
+        builder.push(" AND rule_id = ");
+        builder.push_bind(rule_id.clone());
+    }
 }
 
 fn push_condition(builder: &mut QueryBuilder<'_, Postgres>, condition: Option<&dyn SqlCondition>) {
@@ -399,7 +485,8 @@ impl Storage {
 
     pub async fn get_session(&self, id: i64) -> Result<Option<SessionDetail>, StorageError> {
         let sql = format!(
-            "SELECT {SESSION_COLUMNS}, capture_warnings, decode_summary, flow_summary \
+            "SELECT {SESSION_COLUMNS}, capture_warnings, decode_summary, flow_summary, \
+             detection_summary \
              FROM capture_sessions WHERE id = $1"
         );
         let Some(row) = sqlx::query(&sql)
@@ -414,6 +501,7 @@ impl Storage {
             capture_warnings: row.try_get("capture_warnings")?,
             decode_summary: row.try_get("decode_summary")?,
             flow_summary: row.try_get("flow_summary")?,
+            detection_summary: row.try_get("detection_summary")?,
         }))
     }
 
@@ -653,6 +741,71 @@ impl Storage {
             })
             .collect::<Result<_, sqlx::Error>>()?;
         Ok(page.wrap(items, total))
+    }
+
+    /// Lists a session's alerts.
+    pub async fn list_alerts(
+        &self,
+        session_id: i64,
+        page: Page,
+        sort: AlertSort,
+        filter: &AlertFilter,
+    ) -> Result<Paged<AlertRow>, StorageError> {
+        let mut count =
+            QueryBuilder::<Postgres>::new("SELECT count(*) FROM alerts WHERE session_id = ");
+        count.push_bind(session_id);
+        push_alert_filter(&mut count, filter);
+        let total: i64 = count.build_query_scalar().fetch_one(&self.pool).await?;
+        let mut builder = QueryBuilder::<Postgres>::new(format!(
+            "SELECT {ALERT_COLUMNS} FROM alerts WHERE session_id = "
+        ));
+        builder.push_bind(session_id);
+        push_alert_filter(&mut builder, filter);
+        builder.push(format!(" ORDER BY {} LIMIT ", sort.sql()));
+        builder.push_bind(page.limit());
+        builder.push(" OFFSET ");
+        builder.push_bind(page.offset());
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        let items = rows.iter().map(alert_from_row).collect::<Result<_, _>>()?;
+        Ok(page.wrap(items, total))
+    }
+
+    pub async fn get_alert(
+        &self,
+        session_id: i64,
+        alert_id: i64,
+    ) -> Result<Option<AlertRow>, StorageError> {
+        let sql =
+            format!("SELECT {ALERT_COLUMNS} FROM alerts WHERE session_id = $1 AND alert_id = $2");
+        let row = sqlx::query(&sql)
+            .bind(session_id)
+            .bind(alert_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.as_ref().map(alert_from_row).transpose()?)
+    }
+
+    /// Sets an alert's triage status. Everything else about an alert is
+    /// fixed. Returns the updated alert, or `None` if it does not exist.
+    pub async fn set_alert_status(
+        &self,
+        session_id: i64,
+        alert_id: i64,
+        status: detection_engine::AlertStatus,
+    ) -> Result<Option<AlertRow>, StorageError> {
+        let updated = sqlx::query(
+            "UPDATE alerts SET status = $1, status_changed_at = now() \
+             WHERE session_id = $2 AND alert_id = $3",
+        )
+        .bind(status.as_str())
+        .bind(session_id)
+        .bind(alert_id)
+        .execute(&self.pool)
+        .await?;
+        if updated.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_alert(session_id, alert_id).await
     }
 
     pub async fn retention(&self) -> Result<RetentionSettings, StorageError> {

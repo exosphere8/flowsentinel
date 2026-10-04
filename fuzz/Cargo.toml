@@ -15,6 +15,7 @@ cargo-fuzz = true
 [dependencies]
 capture = { path = "../crates/capture" }
 decoder = { path = "../crates/decoder" }
+detection-engine = { path = "../crates/detection-engine" }
 filter-language = { path = "../crates/filter-language" }
 flow-engine = { path = "../crates/flow-engine" }
 serde_json = "1.0.151"
@@ -37,6 +38,13 @@ bench = false
 [[bin]]
 name = "filter"
 path = "fuzz_targets/filter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "detect"
+path = "fuzz_targets/detect.rs"
 test = false
 doc = false
 bench = false
