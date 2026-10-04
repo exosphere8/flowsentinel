@@ -35,7 +35,7 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 3)
+## Current security posture (Milestone 4)
 
 - The API binds to `127.0.0.1` by default and has **no authentication yet**. Do not expose it to
   a network. The server logs a warning if configured to listen on a non-loopback address.
@@ -69,6 +69,12 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   token-like path segments are masked (a heuristic). Fixtures embed secret marker strings, and
   tests assert they never appear in any output, in any letter case. Details:
   [docs/application-metadata.md](docs/application-metadata.md).
+- `flowsentinel flows` builds flows from decoded metadata only; it never sees packet bytes. The
+  active-flow table and the list of finished flows have fixed maximums (`--max-active-flows`,
+  `--max-flows`), per-flow state is constant-size, and application lists are capped. A capture
+  crafted to create millions of flows therefore causes evictions and uncounted records, not
+  unbounded memory. Flows are timed by an internal clock that ignores a lone timestamp more than
+  a day off, so a corrupt record cannot end, freeze or immortalize flows. Details: [docs/flow-engine.md](docs/flow-engine.md).
 
 Later milestones add authentication and RBAC (9), audit logging (9), upload hardening (5, 11),
 and dependency auditing, secret scanning and static analysis in CI (11).

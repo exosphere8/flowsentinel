@@ -73,3 +73,9 @@ in output.
 | `app-dhcp.pcap` | DISCOVER, OFFER, REQUEST, ACK, then non-DHCP bytes |
 | `app-http.pcap` | Requests and a response with credentials to redact, HEAD on port 8080, non-HTTP on port 80, a URL with credentials embedded in a path |
 | `app-tls.pcap` | ClientHello, ServerHello, Certificate and application-data records, ClientHello on port 8443 |
+
+### Flow fixture
+
+| File | Contents |
+| --- | --- |
+| `flows-mixed.pcap` | A DNS lookup; a TLS connection to the resolved address with handshake, a duplicate segment and FIN both ways; a refused connection (SYN, RST); an IPv6 UDP exchange whose reply has an earlier timestamp; an ARP request; a UDP conversation that idles out and restarts 90 seconds later. Expected: 6 flows (`idle_timeout` 3, `tcp_finished` 2, `capture_end` 1). |

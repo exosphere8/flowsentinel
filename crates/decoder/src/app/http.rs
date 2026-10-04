@@ -352,13 +352,11 @@ fn host_value(bytes: &[u8]) -> Option<String> {
     let port = if bytes.first() == Some(&b'[') {
         let close = bytes.iter().position(|&b| b == b']')?;
         let inside = bytes.get(1..close)?;
-        if inside.is_empty()
-            || !inside
-                .iter()
-                .all(|b| b.is_ascii_hexdigit() || matches!(b, b':' | b'.'))
-        {
-            return None;
-        }
+        // Must be a real IPv6 address, which also bounds its length.
+        std::str::from_utf8(inside)
+            .ok()?
+            .parse::<std::net::Ipv6Addr>()
+            .ok()?;
         bytes.get(close + 1..)?
     } else {
         let colon = bytes.iter().position(|&b| b == b':').unwrap_or(bytes.len());

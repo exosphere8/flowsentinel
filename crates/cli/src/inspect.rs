@@ -16,7 +16,7 @@ use crate::exit;
 pub fn run(args: &InspectArgs) -> ExitCode {
     let mut collector = args.decode.then(SummaryCollector::default);
     let result = inspect_file_with_sink(
-        &args.pcap,
+        &args.capture.pcap,
         &args.limits(),
         &MonotonicClock::start(),
         collector.as_mut().map(|c| c as &mut dyn PacketSink),
@@ -87,7 +87,7 @@ struct ErrorEnvelope<'a> {
     error: ErrorBody<'a>,
 }
 
-fn write_json_error(out: &mut impl Write, err: &CaptureError) -> io::Result<()> {
+pub fn write_json_error(out: &mut impl Write, err: &CaptureError) -> io::Result<()> {
     let message = err.to_string();
     let envelope = ErrorEnvelope {
         error: ErrorBody {

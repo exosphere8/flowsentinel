@@ -14,12 +14,15 @@ Unit and integration tests live next to the code they cover:
 | `crates/decoder/tests/properties.rs` | Property tests: arbitrary bytes never panic; valid UDP round-trips |
 | `crates/decoder/src/app/*.rs` | DNS names and compression loops, DHCP options, HTTP parsing and redaction, TLS hello parsing |
 | `crates/decoder/tests/application.rs` | Application recognition rules, truncation vs segmentation, redaction, property tests on every application port |
-| `fuzz/` | cargo-fuzz targets for the decoder and whole captures (nightly, run manually) |
+| `fuzz/` | cargo-fuzz targets for the decoder, application parsers, flow engine and whole captures (nightly, run manually) |
 | `crates/cli/src/*.rs` | Argument definitions, limit ranges and output rendering |
 | `crates/cli/tests/cli.rs` | The compiled `flowsentinel` binary end to end |
 | `crates/cli/tests/inspect.rs` | `flowsentinel inspect` output, exit codes and payload privacy |
 | `crates/cli/tests/decode.rs` | `inspect --decode` against the decoder fixtures, including payload privacy |
 | `crates/cli/tests/application.rs` | `inspect --decode` against the application fixtures; no secret marker in any output mode |
+| `crates/flow-engine/src/*.rs` | Flow keys, running statistics |
+| `crates/flow-engine/tests/flows.rs` | Direction, initiator inference, TCP states, expiry, eviction, retention, statistics, timestamps, determinism; property test that packet and byte totals are conserved |
+| `crates/cli/tests/flows.rs` | `flowsentinel flows` against `flows-mixed.pcap`: every flow, sorting, limits, exit codes, payload privacy |
 
 This directory is reserved for end-to-end tests that span several services,
 such as the API with PostgreSQL. Those arrive with persistence in Milestone 5.

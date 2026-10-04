@@ -26,6 +26,9 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
 - **Milestone 3, application metadata:** `inspect --decode` also extracts bounded metadata from
   DNS, DHCP, HTTP/1.x and visible TLS handshakes (SNI, ALPN, versions, cipher-suite IDs).
   Credentials, cookies, query strings and bodies are redacted; TLS is never decrypted.
+- **Milestone 4, flow reconstruction:** `flowsentinel flows --pcap` groups packets into
+  bidirectional flows with per-direction counters, size and timing statistics, approximate TCP
+  state and application metadata, within fixed memory limits.
 
 ## Quick start
 
@@ -96,6 +99,24 @@ cargo run -p cli -- inspect --pcap fixtures/pcap/app-tls.pcap --decode --verbose
 See [docs/application-metadata.md](docs/application-metadata.md) for fields, limits and redaction
 rules.
 
+### Reconstruct flows
+
+```bash
+cargo run -p cli -- flows --pcap fixtures/pcap/flows-mixed.pcap
+cargo run -p cli -- flows --pcap fixtures/pcap/flows-mixed.pcap --sort bytes --json
+```
+
+```text
+      ID  Proto  Initiator              Responder              Packets       Bytes    Duration  State         Application
+       1  UDP    192.0.2.10:53100       192.0.2.53:53                2         166      0.020s  -             DNS www.example.com
+       2  TCP    192.0.2.10:40500       198.51.100.80:443            9        1017      0.211s  closed        TLS www.example.com
+       3  TCP    192.0.2.10:40501       198.51.100.80:8080           2         108      0.001s  reset         (www.example.com)
+```
+
+Both directions of a conversation form one flow. The initiator comes from the TCP handshake when
+one is seen, otherwise from the first packet, never from address order. See
+[docs/flow-engine.md](docs/flow-engine.md) for statistics, timeouts, memory limits and JSON.
+
 ### Windows note
 
 When a checkout sits in a deeply nested folder, Cargo's build-script paths can exceed the classic
@@ -140,6 +161,7 @@ crates/
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
   decoder/      Bounds-checked protocol and application-metadata decoder
+  flow-engine/  Bidirectional flow reconstruction with bounded memory
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
@@ -155,7 +177,7 @@ tests/          Cross-service end-to-end tests (from Milestone 5)
 | 1 | Safe offline PCAP ingestion | Done |
 | 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Done |
 | 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Done |
-| 4 | Bidirectional flow reconstruction | Planned |
+| 4 | Bidirectional flow reconstruction | Done |
 | 5 | PostgreSQL persistence and REST API | Planned |
 | 6 | Display-filter language | Planned |
 | 7 | Explainable rule-based detection | Planned |

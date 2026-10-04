@@ -484,6 +484,63 @@ def pcapng_minimal() -> bytes:
     return shb + idb
 
 
+
+# --- Flow fixture (Milestone 4) ---------------------------------------------
+
+
+def capture_timed(frames: list[tuple[float, bytes]]) -> bytes:
+    """Capture with explicit packet times in seconds after BASE_TIME."""
+    out = global_header("<")
+    for seconds, frame in frames:
+        whole = int(seconds)
+        micros = round((seconds - whole) * 1_000_000)
+        out += record("<", BASE_TIME + whole, micros, frame)
+    return out
+
+
+def flow_fixtures() -> dict[str, bytes]:
+    dns_q = dns_header(0x00F1, 0x0100, 1, 0) + dns_question("www.example.com", 1)
+    dns_r = (
+        dns_header(0x00F1, 0x8180, 1, 1)
+        + dns_question("www.example.com", 1)
+        + dns_rr(b"\xc0\x0c", 1, 300, WEB_SERVER)
+    )
+    syn_opts = bytes([2, 4, 0x05, 0xB4])
+
+    def tcp_v4(src, dst, sport, dport, flags, seq, ack, payload=b"", options=b""):
+        return eth(0x0800, ipv4(6, tcp(sport, dport, flags, seq, ack, payload, options), src=src, dst=dst))
+
+    hello = client_hello(b"www.example.com")
+    frames = [
+        # Flow 1: DNS lookup of www.example.com -> 198.51.100.80.
+        (0.000, udp_ip(IP_A, DNS_SERVER, 53100, 53, dns_q)),
+        (0.020, udp_ip(DNS_SERVER, IP_A, 53, 53100, dns_r)),
+        # Flow 2: TLS to the resolved address; full handshake, data, FIN both ways.
+        (0.100, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_SYN, 1000, 0, options=syn_opts)),
+        (0.130, tcp_v4(WEB_SERVER, IP_A, 443, 40500, TCP_SYN | TCP_ACK, 7000, 1001, options=syn_opts)),
+        (0.131, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_ACK, 1001, 7001)),
+        (0.132, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_PSH | TCP_ACK, 1001, 7001, hello)),
+        (0.132, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_PSH | TCP_ACK, 1001, 7001, hello)),  # duplicate
+        (0.170, tcp_v4(WEB_SERVER, IP_A, 443, 40500, TCP_PSH | TCP_ACK, 7001, 1001 + len(hello), server_hello())),
+        (0.300, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_FIN | TCP_ACK, 1001 + len(hello), 7200)),
+        (0.310, tcp_v4(WEB_SERVER, IP_A, 443, 40500, TCP_FIN | TCP_ACK, 7200, 1002 + len(hello))),
+        (0.311, tcp_v4(IP_A, WEB_SERVER, 40500, 443, TCP_ACK, 1002 + len(hello), 7201)),
+        # Flow 3: connection refused (SYN answered by RST).
+        (0.400, tcp_v4(IP_A, WEB_SERVER, 40501, 8080, TCP_SYN, 5000, 0)),
+        (0.401, tcp_v4(WEB_SERVER, IP_A, 8080, 40501, TCP_RST | TCP_ACK, 0, 5001)),
+        # Flow 4: IPv6 UDP exchange; the reply arrives with an earlier timestamp.
+        (0.500, eth(0x86DD, ipv6(17, udp(40600, 9, PAYLOAD_MARKER)))),
+        (0.499, eth(0x86DD, ipv6(17, udp(9, 40600, PAYLOAD_MARKER), src=IP6_B, dst=IP6_A))),
+        # Not a flow: ARP.
+        (0.600, eth(0x0806, arp(1, IP_A, GATEWAY), dst=BROADCAST)),
+        # Flow 5 and 6: the same UDP 5-tuple, 90 s apart, so the first idles out.
+        (1.000, udp_ip(IP_A, WEB_SERVER, 40700, 9, b"x" * 10)),
+        (2.000, udp_ip(WEB_SERVER, IP_A, 9, 40700, b"y" * 20)),
+        (92.000, udp_ip(IP_A, WEB_SERVER, 40700, 9, b"z" * 30)),
+    ]
+    return {"flows-mixed.pcap": capture_timed(frames)}
+
+
 def fixtures() -> dict[str, bytes]:
     le, be = "<", ">"
     files: dict[str, bytes] = {}
@@ -535,6 +592,7 @@ def fixtures() -> dict[str, bytes]:
     )
     files.update(decode_fixtures())
     files.update(application_fixtures())
+    files.update(flow_fixtures())
     return files
 
 
