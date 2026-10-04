@@ -1,0 +1,73 @@
+import { formatNumber } from '../lib/format';
+
+/**
+ * Shown instead of an empty table when the page number is past the last
+ * page, for example after deleting the only item on the last page.
+ */
+export function PastEnd({
+  total,
+  perPage,
+  onPage,
+}: {
+  total: number;
+  perPage: number;
+  onPage: (page: number) => void;
+}) {
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  return (
+    <div className="state state-empty">
+      <p className="state-title">This page is past the end</p>
+      <p>
+        There are {formatNumber(total)} results on {formatNumber(pages)}{' '}
+        {pages === 1 ? 'page' : 'pages'}.
+      </p>
+      <button type="button" onClick={() => onPage(pages)}>
+        Go to the last page
+      </button>
+    </div>
+  );
+}
+
+export function Pagination({
+  page,
+  perPage,
+  total,
+  onPage,
+  label,
+}: {
+  page: number;
+  perPage: number;
+  total: number;
+  onPage: (page: number) => void;
+  label: string;
+}) {
+  const pages = Math.max(1, Math.ceil(total / perPage));
+  const first = total === 0 ? 0 : (page - 1) * perPage + 1;
+  const last = Math.min(total, page * perPage);
+  return (
+    <nav className="pagination" aria-label={`${label} pages`}>
+      <p className="pagination-range">
+        {total === 0
+          ? 'No results'
+          : `${formatNumber(first)}–${formatNumber(last)} of ${formatNumber(total)}`}
+      </p>
+      <div className="pagination-buttons">
+        <button type="button" onClick={() => onPage(1)} disabled={page <= 1}>
+          First
+        </button>
+        <button type="button" onClick={() => onPage(page - 1)} disabled={page <= 1}>
+          Previous
+        </button>
+        <span aria-current="page">
+          Page {formatNumber(Math.min(page, pages))} of {formatNumber(pages)}
+        </span>
+        <button type="button" onClick={() => onPage(page + 1)} disabled={page >= pages}>
+          Next
+        </button>
+        <button type="button" onClick={() => onPage(pages)} disabled={page >= pages}>
+          Last
+        </button>
+      </div>
+    </nav>
+  );
+}

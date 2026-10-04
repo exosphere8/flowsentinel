@@ -32,6 +32,8 @@ pub struct ApiConfig {
     pub host_policy: HostPolicy,
     /// Validated rule thresholds, applied to every import.
     pub detection: DetectionConfig,
+    /// Built dashboard to serve at `/` (a directory with `index.html`).
+    pub dashboard_dir: Option<PathBuf>,
 }
 
 /// State shared by all handlers.

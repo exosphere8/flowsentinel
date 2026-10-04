@@ -2,7 +2,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use api_server::host::HostPolicy;
-use api_server::{ApiConfig, AppState, Config, DATABASE_URL_ENV_VAR, app_with_state, upload};
+use api_server::{
+    ApiConfig, AppState, Config, DATABASE_URL_ENV_VAR, app_with_state, healthcheck, upload,
+};
 use capture::CaptureLimits;
 use detection_engine::DetectionConfig;
 use flow_engine::FlowConfig;
@@ -14,9 +16,19 @@ use tracing_subscriber::EnvFilter;
 const PURGE_INTERVAL: Duration = Duration::from_secs(3600);
 /// How long in-flight requests may run after a shutdown signal.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
+/// Time allowed for `api-server healthcheck`.
+const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    match std::env::args().nth(1).as_deref() {
+        None => {}
+        Some("healthcheck") => return run_healthcheck().await,
+        Some(other) => {
+            eprintln!("error: unknown argument {other:?}; usage: api-server [healthcheck]");
+            return ExitCode::from(2);
+        }
+    }
     init_tracing();
 
     let config = match Config::from_env() {
@@ -85,6 +97,18 @@ async fn main() -> ExitCode {
         },
     };
 
+    if let Some(dir) = &config.dashboard_dir {
+        if !dir.join("index.html").is_file() {
+            tracing::error!(
+                path = %dir.display(),
+                "invalid configuration: FLOWSENTINEL_DASHBOARD_DIR has no index.html; \
+                 build the dashboard with `npm run build` in frontend/"
+            );
+            return ExitCode::FAILURE;
+        }
+        tracing::info!(path = %dir.display(), "serving the dashboard at /");
+    }
+
     if !config.addr.ip().is_loopback() {
         tracing::warn!(
             addr = %config.addr,
@@ -123,6 +147,7 @@ async fn main() -> ExitCode {
             flow_config: FlowConfig::default(),
             host_policy,
             detection,
+            dashboard_dir: config.dashboard_dir.clone(),
         },
         config.max_concurrent_imports,
     );
@@ -167,6 +192,25 @@ async fn main() -> ExitCode {
 
     tracing::info!("flowsentinel-api stopped");
     ExitCode::SUCCESS
+}
+
+/// Probes `GET /health` on the configured address; exit code 0 when the
+/// server answers `200`. Used by container health checks.
+async fn run_healthcheck() -> ExitCode {
+    let config = match Config::from_env() {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match healthcheck::probe(config.addr, HEALTHCHECK_TIMEOUT).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("unhealthy: {err}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// Deletes expired captures at startup and then every hour.

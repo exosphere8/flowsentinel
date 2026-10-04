@@ -49,6 +49,7 @@ thiserror = "2.0.21"
 toml = "1.1.6"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 # 5.x supports the workspace's Rust 1.85 minimum (6.x needs 1.88).

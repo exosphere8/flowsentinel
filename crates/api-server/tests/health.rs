@@ -67,3 +67,46 @@ async fn health_over_tcp() {
     assert!(raw.ends_with(EXPECTED_BODY), "response: {raw}");
     server.abort();
 }
+
+/// `api-server healthcheck` succeeds against a serving instance, also when
+/// the server listens on the unspecified address, and fails fast otherwise.
+#[tokio::test]
+async fn healthcheck_probe() {
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app()).await });
+    let timeout = Duration::from_secs(5);
+    api_server::healthcheck::probe(addr, timeout).await.unwrap();
+    let unspecified = format!("0.0.0.0:{}", addr.port()).parse().unwrap();
+    api_server::healthcheck::probe(unspecified, timeout)
+        .await
+        .unwrap();
+    server.abort();
+    let _ = server.await;
+
+    // Nothing listens there any more.
+    let err = api_server::healthcheck::probe(addr, timeout)
+        .await
+        .unwrap_err();
+    assert!(err.contains("cannot connect"), "{err}");
+
+    // A server that answers something else is unhealthy.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let other = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = [0u8; 256];
+        let _ = stream.read(&mut request).await;
+        stream
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .unwrap();
+    });
+    let err = api_server::healthcheck::probe(addr, timeout)
+        .await
+        .unwrap_err();
+    assert!(err.contains("503"), "{err}");
+    other.abort();
+}

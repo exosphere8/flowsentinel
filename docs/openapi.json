@@ -1,0 +1,3377 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FlowSentinel API",
+    "description": "Metadata-only analysis of authorized packet captures. No endpoint returns packet payloads, and TLS is never decrypted.",
+    "contact": {
+      "name": "exosphere8"
+    },
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/captures": {
+      "get": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "List imported captures.",
+        "operationId": "list_captures",
+        "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`newest` (default), `oldest`, `packets` or `size`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of captures",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_Session"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Import a classic `.pcap` file.",
+        "description": "Send the file as the raw request body. It is streamed to a private\ntemporary file (size-limited), analyzed in two passes, stored as metadata\nonly in one transaction, and the temporary file is deleted.",
+        "operationId": "import_capture",
+        "parameters": [
+          {
+            "name": "file_name",
+            "in": "query",
+            "description": "Original file name; must end in `.pcap`. Only the final path\ncomponent is kept, sanitized and shortened to 128 characters.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Classic libpcap file, as the raw request body",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "$ref": "#/components/schemas/PcapFile"
+              }
+            },
+            "application/vnd.tcpdump.pcap": {
+              "schema": {
+                "$ref": "#/components/schemas/PcapFile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Imported",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "Upload stalled or too slow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload too large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Wrong content type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Not a supported or valid capture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many imports in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}": {
+      "get": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Get one capture with its summaries.",
+        "operationId": "get_capture",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The capture",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionDetail"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid ID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Delete a capture and all its stored metadata.",
+        "operationId": "delete_capture",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/alerts": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "List a capture's alerts.",
+        "description": "Alerts are heuristic indicators that deserve review, not proof of\ncompromise. Each carries its evidence, its uncertainty and likely false\npositives.",
+        "operationId": "list_alerts",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`severity` (default: most severe first), `time` or `id`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Only alerts of this severity: `low`, `medium` or `high`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only alerts with this status: `open`, `acknowledged`, `resolved` or\n`false_positive`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rule",
+            "in": "query",
+            "description": "Only alerts of this rule, for example `FS-SCAN-SYN`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of alerts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_AlertRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/alerts/{alert_id}": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Get one alert with its evidence.",
+        "operationId": "get_alert",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "description": "Alert ID within the capture",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The alert",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRow"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "Change an alert's triage status. Nothing else about an alert can change.",
+        "operationId": "update_alert",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "description": "Alert ID within the capture",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated alert",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/dns": {
+      "get": {
+        "tags": [
+          "application"
+        ],
+        "summary": "List DNS messages of a capture.",
+        "operationId": "list_dns",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of DNS events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_DnsEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/flows": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "List a capture's flows.",
+        "operationId": "list_flows",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`start` (default), `-bytes`, `-packets` or `-duration`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Display filter over flow fields, for example `flow.bytes > 1000000`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of flows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_FlowSummaryRow"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/flows/{flow_id}": {
+      "get": {
+        "tags": [
+          "flows"
+        ],
+        "summary": "Get one flow with its full statistics.",
+        "operationId": "get_flow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "path",
+            "description": "Flow ID within the capture",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The flow",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlowDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/http": {
+      "get": {
+        "tags": [
+          "application"
+        ],
+        "summary": "List HTTP request and response metadata of a capture.",
+        "operationId": "list_http",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of HTTP events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_HttpEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/packets": {
+      "get": {
+        "tags": [
+          "packets"
+        ],
+        "summary": "List a capture's packets.",
+        "operationId": "list_packets",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "`index` (default), `-index`, `time` or `-length`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "flow_id",
+            "in": "query",
+            "description": "Only packets of this flow.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "Display filter over packet fields, for example\n`tcp.port == 443 and not ip.addr == 192.0.2.0/24`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of packets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_PacketSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/packets/{index}": {
+      "get": {
+        "tags": [
+          "packets"
+        ],
+        "summary": "Get one packet with its decoded protocol tree.",
+        "operationId": "get_packet",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "description": "1-based packet index",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The packet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PacketDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/captures/{id}/tls": {
+      "get": {
+        "tags": [
+          "application"
+        ],
+        "summary": "List visible TLS handshake metadata of a capture. Nothing is decrypted.",
+        "operationId": "list_tls",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Capture ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "description": "1-based page number (default 1, at most 1000000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 1000000,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "description": "Items per page, 1-500 (default 50).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "maximum": 500,
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of TLS handshake events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Paged_TlsEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Capture not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/filters/fields": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "List the fields a filter may use.",
+        "operationId": "filter_fields",
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "description": "`packets` or `flows`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filterable fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FilterField"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/filters/validate": {
+      "get": {
+        "tags": [
+          "filters"
+        ],
+        "summary": "Check a display filter without running it.",
+        "operationId": "validate_filter",
+        "parameters": [
+          {
+            "name": "target",
+            "in": "query",
+            "description": "`packets` or `flows`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "description": "The filter to check.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The filter is valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FilterCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter, with the position of the problem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "tags": [
+          "captures"
+        ],
+        "summary": "Totals across all captures, alert counts and the newest captures.",
+        "operationId": "overview",
+        "responses": {
+          "200": {
+            "description": "Totals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/rules": {
+      "get": {
+        "tags": [
+          "alerts"
+        ],
+        "summary": "List the detection rules.",
+        "operationId": "list_rules",
+        "responses": {
+          "200": {
+            "description": "The rule catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RuleInfo"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/retention": {
+      "get": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Get retention settings.",
+        "operationId": "get_retention",
+        "responses": {
+          "200": {
+            "description": "Current settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionSettings"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "settings"
+        ],
+        "summary": "Replace retention settings.",
+        "operationId": "put_retention",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetentionSettings"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetentionSettings"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Malformed body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Server busy or database unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AlertRow": {
+        "type": "object",
+        "description": "One stored alert: a heuristic indicator with its evidence. Never proof\nof compromise.",
+        "required": [
+          "alert_id",
+          "rule_id",
+          "rule_name",
+          "severity",
+          "confidence",
+          "status",
+          "nature",
+          "related_flow_ids",
+          "related_packet_indexes",
+          "evidence",
+          "explanation",
+          "uncertainty",
+          "likely_false_positives",
+          "mitre_attack"
+        ],
+        "properties": {
+          "alert_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "confidence": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "destination": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "destination_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "`[{\"name\": ..., \"value\": ...}]`: the measured facts behind the alert."
+          },
+          "explanation": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_seen_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_seen_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "likely_false_positives": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mitre_attack": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "MITRE ATT&CK techniques as context only; not a claim that a technique\nwas used."
+          },
+          "nature": {
+            "type": "string",
+            "description": "Always the same statement that alerts are heuristic indicators."
+          },
+          "related_flow_ids": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "related_packet_indexes": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          "rule_id": {
+            "type": "string"
+          },
+          "rule_name": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "description": "`open`, `acknowledged`, `resolved` or `false_positive`."
+          },
+          "status_changed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "RFC 3339, UTC: when an analyst last changed the status."
+          },
+          "uncertainty": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertUpdate": {
+        "type": "object",
+        "description": "A triage status change.",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`open`, `acknowledged`, `resolved` or `false_positive`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "DnsEvent": {
+        "type": "object",
+        "required": [
+          "packet_index",
+          "transaction_id",
+          "is_response",
+          "answer_count",
+          "answers"
+        ],
+        "properties": {
+          "answer_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "flow_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "is_response": {
+            "type": "boolean"
+          },
+          "packet_index": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "query_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transaction_id": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ts_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "ErrorBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Stable machine-readable code, for example `not_found`."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable explanation."
+          },
+          "position": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Position",
+                "description": "For filter errors: the byte range `[start, end)` of the problem in\nthe filter text."
+              }
+            ]
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/ErrorBody"
+          }
+        }
+      },
+      "FilterCheck": {
+        "type": "object",
+        "description": "A valid filter.",
+        "required": [
+          "valid",
+          "target",
+          "normalized",
+          "parameters"
+        ],
+        "properties": {
+          "normalized": {
+            "type": "string",
+            "description": "The filter in canonical form (keywords lowercased, values quoted)."
+          },
+          "parameters": {
+            "type": "integer",
+            "description": "Values bound as query parameters.",
+            "minimum": 0
+          },
+          "target": {
+            "type": "string"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FilterField": {
+        "type": "object",
+        "description": "One filterable field.",
+        "required": [
+          "name",
+          "type",
+          "description",
+          "operators"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "max": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Largest allowed value, for integer fields.",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "operators": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Operators the field accepts."
+          },
+          "type": {
+            "type": "string",
+            "description": "`ip address or cidr`, `unsigned integer`, `number`, `text`,\n`keyword` or `boolean`."
+          },
+          "values": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Allowed values, for keyword fields."
+          }
+        }
+      },
+      "FlowDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FlowSummaryRow"
+          },
+          {
+            "type": "object",
+            "required": [
+              "record"
+            ],
+            "properties": {
+              "record": {
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "description": "A flow with its full record (statistics, TCP, application metadata)."
+      },
+      "FlowSummaryRow": {
+        "type": "object",
+        "description": "One flow's indexed metadata.",
+        "required": [
+          "flow_id",
+          "ip_version",
+          "protocol",
+          "initiator_ip",
+          "initiator_port",
+          "responder_ip",
+          "responder_port",
+          "duration_seconds",
+          "packets_total",
+          "bytes_total",
+          "end_reason",
+          "dominant_endpoint",
+          "alert_count"
+        ],
+        "properties": {
+          "alert_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Alerts that cite this flow (at most 16 are linked)."
+          },
+          "bytes_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "dominant_endpoint": {
+            "type": "string"
+          },
+          "duration_seconds": {
+            "type": "number",
+            "format": "double"
+          },
+          "end_reason": {
+            "type": "string"
+          },
+          "first_seen": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "first_seen_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "flow_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "initiator_ip": {
+            "type": "string"
+          },
+          "initiator_port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "ip_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "last_seen_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "max_alert_severity": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`low`, `medium` or `high`: the most severe linked alert."
+          },
+          "packets_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "protocol": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "protocol_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "responder_ip": {
+            "type": "string"
+          },
+          "responder_port": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "tcp_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "HttpEvent": {
+        "type": "object",
+        "required": [
+          "packet_index",
+          "kind",
+          "redacted"
+        ],
+        "properties": {
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flow_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string"
+          },
+          "method": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packet_index": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "redacted": {
+            "type": "boolean",
+            "description": "Credentials, cookies or a query string were present and removed."
+          },
+          "status_code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "Overview": {
+        "type": "object",
+        "description": "Totals across every stored capture, for the dashboard's overview.",
+        "required": [
+          "captures",
+          "packets_processed",
+          "flows_total",
+          "alerts_total",
+          "alerts_by_severity",
+          "alerts_by_status",
+          "open_alerts_by_severity",
+          "recent_captures"
+        ],
+        "properties": {
+          "alerts_by_severity": {
+            "type": "object",
+            "description": "Alerts by severity (`low`, `medium`, `high`), any status.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "alerts_by_status": {
+            "type": "object",
+            "description": "Alerts by triage status.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "alerts_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts are heuristic indicators, not proof of compromise."
+          },
+          "captures": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "flows_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "open_alerts_by_severity": {
+            "type": "object",
+            "description": "Open alerts by severity.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "packets_processed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "recent_captures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            },
+            "description": "The five most recent imports, newest first."
+          }
+        }
+      },
+      "PacketDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PacketSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "layers",
+              "warnings"
+            ],
+            "properties": {
+              "layers": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                },
+                "description": "Decoded layers as produced by the decoder (metadata only)."
+              },
+              "warnings": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        ],
+        "description": "A packet with its full decoded protocol tree."
+      },
+      "PacketSummary": {
+        "type": "object",
+        "description": "One packet's indexed metadata.",
+        "required": [
+          "packet_index",
+          "captured_length",
+          "original_length",
+          "decode_status",
+          "info"
+        ],
+        "properties": {
+          "captured_length": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "decode_status": {
+            "type": "string"
+          },
+          "destination": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dst_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "flow_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "info": {
+            "type": "string"
+          },
+          "original_length": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "packet_index": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "src_port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "top_protocol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        }
+      },
+      "Paged_AlertRow": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One stored alert: a heuristic indicator with its evidence. Never proof\nof compromise.",
+              "required": [
+                "alert_id",
+                "rule_id",
+                "rule_name",
+                "severity",
+                "confidence",
+                "status",
+                "nature",
+                "related_flow_ids",
+                "related_packet_indexes",
+                "evidence",
+                "explanation",
+                "uncertainty",
+                "likely_false_positives",
+                "mitre_attack"
+              ],
+              "properties": {
+                "alert_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "confidence": {
+                  "type": "string",
+                  "description": "`low`, `medium` or `high`."
+                },
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "destination_port": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  },
+                  "description": "`[{\"name\": ..., \"value\": ...}]`: the measured facts behind the alert."
+                },
+                "explanation": {
+                  "type": "string"
+                },
+                "first_seen": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "first_seen_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "last_seen": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_seen_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "likely_false_positives": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "mitre_attack": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "MITRE ATT&CK techniques as context only; not a claim that a technique\nwas used."
+                },
+                "nature": {
+                  "type": "string",
+                  "description": "Always the same statement that alerts are heuristic indicators."
+                },
+                "related_flow_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "related_packet_indexes": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "rule_id": {
+                  "type": "string"
+                },
+                "rule_name": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "description": "`low`, `medium` or `high`."
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "description": "`open`, `acknowledged`, `resolved` or `false_positive`."
+                },
+                "status_changed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "RFC 3339, UTC: when an analyst last changed the status."
+                },
+                "uncertainty": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_DnsEvent": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "packet_index",
+                "transaction_id",
+                "is_response",
+                "answer_count",
+                "answers"
+              ],
+              "properties": {
+                "answer_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "answers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                },
+                "flow_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "is_response": {
+                  "type": "boolean"
+                },
+                "packet_index": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "query_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "query_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "response_code": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "transaction_id": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "ts_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_FlowSummaryRow": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One flow's indexed metadata.",
+              "required": [
+                "flow_id",
+                "ip_version",
+                "protocol",
+                "initiator_ip",
+                "initiator_port",
+                "responder_ip",
+                "responder_port",
+                "duration_seconds",
+                "packets_total",
+                "bytes_total",
+                "end_reason",
+                "dominant_endpoint",
+                "alert_count"
+              ],
+              "properties": {
+                "alert_count": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "Alerts that cite this flow (at most 16 are linked)."
+                },
+                "bytes_total": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "dominant_endpoint": {
+                  "type": "string"
+                },
+                "duration_seconds": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "end_reason": {
+                  "type": "string"
+                },
+                "first_seen": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "first_seen_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "flow_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "initiator_ip": {
+                  "type": "string"
+                },
+                "initiator_port": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "ip_version": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "last_seen_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "max_alert_severity": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "`low`, `medium` or `high`: the most severe linked alert."
+                },
+                "packets_total": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "protocol": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "protocol_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "responder_ip": {
+                  "type": "string"
+                },
+                "responder_port": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "tcp_state": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_HttpEvent": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "packet_index",
+                "kind",
+                "redacted"
+              ],
+              "properties": {
+                "content_type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "flow_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "host": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "method": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "packet_index": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "redacted": {
+                  "type": "boolean",
+                  "description": "Credentials, cookies or a query string were present and removed."
+                },
+                "status_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ts_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_PacketSummary": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One packet's indexed metadata.",
+              "required": [
+                "packet_index",
+                "captured_length",
+                "original_length",
+                "decode_status",
+                "info"
+              ],
+              "properties": {
+                "captured_length": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "decode_status": {
+                  "type": "string"
+                },
+                "destination": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "dst_port": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "flow_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "info": {
+                  "type": "string"
+                },
+                "original_length": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "packet_index": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "src_port": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "top_protocol": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ts_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_Session": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A stored capture session.",
+              "required": [
+                "id",
+                "file_name",
+                "file_size_bytes",
+                "sha256",
+                "source",
+                "completion_state",
+                "pcap_version",
+                "endianness",
+                "timestamp_resolution",
+                "link_type",
+                "snap_length",
+                "packets_processed",
+                "packets_stored",
+                "captured_bytes_total",
+                "original_bytes_total",
+                "flows_total",
+                "flows_stored",
+                "alerts_total",
+                "created_at",
+                "expires_at"
+              ],
+              "properties": {
+                "alerts_total": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Alerts raised by the detection rules (heuristic indicators)."
+                },
+                "captured_bytes_total": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "completion_state": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "description": "RFC 3339, UTC."
+                },
+                "endianness": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "description": "RFC 3339, UTC. The session and everything stored for it are deleted\nafter this time."
+                },
+                "file_name": {
+                  "type": "string"
+                },
+                "file_size_bytes": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "first_packet_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "first_packet_time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "flows_stored": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Flows with stored records (may be fewer than the total when the flow\nengine's retention limit was reached)."
+                },
+                "flows_total": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "last_packet_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "last_packet_time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "link_type": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "link_type_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "original_bytes_total": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "packets_processed": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "packets_stored": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Packets with stored metadata (may be fewer than processed, see\nretention settings)."
+                },
+                "pcap_version": {
+                  "type": "string"
+                },
+                "sha256": {
+                  "type": "string",
+                  "description": "SHA-256 of the uploaded file, for identifying duplicates."
+                },
+                "snap_length": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "timestamp_resolution": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "Paged_TlsEvent": {
+        "type": "object",
+        "description": "A page of results.",
+        "required": [
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "packet_index",
+                "handshake_type",
+                "alpn",
+                "cipher_suite_count",
+                "visibility"
+              ],
+              "properties": {
+                "alpn": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cipher_suite_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "flow_id": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "handshake_type": {
+                  "type": "string"
+                },
+                "negotiated_version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "packet_index": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "server_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "time": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ts_ns": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "visibility": {
+                  "type": "string",
+                  "description": "Always \"visible handshake metadata only; nothing is decrypted\"."
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "per_page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total matching items across all pages."
+          }
+        }
+      },
+      "PcapFile": {
+        "type": "string",
+        "format": "binary"
+      },
+      "Position": {
+        "type": "object",
+        "description": "A byte range in a request value.",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "start": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RetentionSettings": {
+        "type": "object",
+        "description": "How long imported data is kept.",
+        "required": [
+          "session_ttl_days",
+          "max_packets_stored"
+        ],
+        "properties": {
+          "max_packets_stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Packets whose metadata is stored per session (0-1000000). Flows and\nsummaries always cover the whole capture."
+          },
+          "session_ttl_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Sessions are deleted this many days after import (1-3650)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RuleInfo": {
+        "type": "object",
+        "description": "One detection rule.",
+        "required": [
+          "id",
+          "name",
+          "severity",
+          "description",
+          "uncertainty",
+          "likely_false_positives",
+          "mitre_attack",
+          "nature"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "description": "Stable identifier, for example `FS-SCAN-SYN`."
+          },
+          "likely_false_positives": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mitre_attack": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "MITRE ATT&CK techniques the pattern can relate to, as context only."
+          },
+          "name": {
+            "type": "string"
+          },
+          "nature": {
+            "type": "string",
+            "description": "Every alert is a heuristic indicator, not proof of compromise."
+          },
+          "severity": {
+            "type": "string",
+            "description": "`low`, `medium` or `high`."
+          },
+          "uncertainty": {
+            "type": "string",
+            "description": "Why an alert from this rule may be wrong."
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "description": "A stored capture session.",
+        "required": [
+          "id",
+          "file_name",
+          "file_size_bytes",
+          "sha256",
+          "source",
+          "completion_state",
+          "pcap_version",
+          "endianness",
+          "timestamp_resolution",
+          "link_type",
+          "snap_length",
+          "packets_processed",
+          "packets_stored",
+          "captured_bytes_total",
+          "original_bytes_total",
+          "flows_total",
+          "flows_stored",
+          "alerts_total",
+          "created_at",
+          "expires_at"
+        ],
+        "properties": {
+          "alerts_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts raised by the detection rules (heuristic indicators)."
+          },
+          "captured_bytes_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completion_state": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC."
+          },
+          "endianness": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "RFC 3339, UTC. The session and everything stored for it are deleted\nafter this time."
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "file_size_bytes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "first_packet_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "first_packet_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "flows_stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Flows with stored records (may be fewer than the total when the flow\nengine's retention limit was reached)."
+          },
+          "flows_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_packet_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_packet_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "link_type": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "link_type_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "original_bytes_total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "packets_processed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "packets_stored": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Packets with stored metadata (may be fewer than processed, see\nretention settings)."
+          },
+          "pcap_version": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "description": "SHA-256 of the uploaded file, for identifying duplicates."
+          },
+          "snap_length": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "source": {
+            "type": "string"
+          },
+          "timestamp_resolution": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Session"
+          },
+          {
+            "type": "object",
+            "required": [
+              "capture_warnings",
+              "decode_summary",
+              "flow_summary",
+              "detection_summary"
+            ],
+            "properties": {
+              "capture_warnings": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "decode_summary": {
+                "type": "object"
+              },
+              "detection_summary": {
+                "type": "object",
+                "description": "Alert counts by rule and severity, and what the rules evaluated."
+              },
+              "flow_summary": {
+                "type": "object"
+              }
+            }
+          }
+        ],
+        "description": "A session with its stored summaries."
+      },
+      "TlsEvent": {
+        "type": "object",
+        "required": [
+          "packet_index",
+          "handshake_type",
+          "alpn",
+          "cipher_suite_count",
+          "visibility"
+        ],
+        "properties": {
+          "alpn": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cipher_suite_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "flow_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "handshake_type": {
+            "type": "string"
+          },
+          "negotiated_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packet_index": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "server_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ts_ns": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "visibility": {
+            "type": "string",
+            "description": "Always \"visible handshake metadata only; nothing is decrypted\"."
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "captures",
+      "description": "Import, list and delete captures"
+    },
+    {
+      "name": "packets",
+      "description": "Per-packet metadata"
+    },
+    {
+      "name": "flows",
+      "description": "Bidirectional flows"
+    },
+    {
+      "name": "application",
+      "description": "DNS, HTTP and TLS handshake metadata"
+    },
+    {
+      "name": "alerts",
+      "description": "Heuristic detections: indicators to review, not proof of compromise"
+    },
+    {
+      "name": "filters",
+      "description": "Display-filter validation and field catalog"
+    },
+    {
+      "name": "settings",
+      "description": "Retention settings"
+    }
+  ]
+}

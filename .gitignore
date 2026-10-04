@@ -35,6 +35,8 @@ node_modules/
 frontend/dist/
 frontend/build/
 frontend/.vite/
+frontend/test-results/
+frontend/playwright-report/
 coverage/
 
 # Editors and OS artifacts

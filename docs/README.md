@@ -13,6 +13,7 @@
 | [api.md](api.md) | REST API: running, importing, endpoints, pagination, sorting, errors |
 | [filter-language.md](filter-language.md) | Display filters: syntax, fields, semantics, limits, errors, how they become SQL |
 | [detection-rules.md](detection-rules.md) | `flowsentinel detect` and API alerts: the rules, alert fields, thresholds, limits, measurements |
+| [dashboard.md](dashboard.md) | The web dashboard: pages, running it, security headers, privacy, accessibility, tests |
 | [data-retention.md](data-retention.md) | What is stored, what never is, retention settings and deletion |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 

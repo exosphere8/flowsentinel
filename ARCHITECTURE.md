@@ -15,9 +15,10 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 7)
+## Current components (Milestone 8)
 
 ```
+  browser: dashboard (React, served at /)
   curl / client --HTTP--> +--------------------+  /health, /api/v1/... (JSON, OpenAPI)
                           | api-server (Axum)  |-- stream upload --> private temp file (.pcap)
                           +----+-----------+---+-- ?filter= --> filter-language --> SQL pieces + parameters
@@ -41,8 +42,8 @@ will live. It is updated at the end of every milestone.
 
 ### `crates/api-server`
 
-- `lib.rs` holds `Config` and two routers: `app()` (health only) and `app_with_state()` (health
-  plus `/api/v1`). Keeping them in a library lets tests drive the real router in-process
+- `lib.rs` holds `Config` and two routers: `app()` (health only) and `app_with_state()` (health,
+  `/api/v1` and, when `FLOWSENTINEL_DASHBOARD_DIR` is set, the built dashboard at `/`). Keeping them in a library lets tests drive the real router in-process
   (`tower::ServiceExt::oneshot`) and over a real socket. See [docs/api.md](docs/api.md).
 - `main.rs` initializes structured JSON logging (`tracing-subscriber`) and loads configuration
   from the environment, including the detection thresholds (`FLOWSENTINEL_DETECTION_CONFIG`). It
@@ -57,6 +58,12 @@ will live. It is updated at the end of every milestone.
   idle timeout and a minimum average rate, and computing the SHA-256 on the way. The import handler then runs both analysis
   passes on blocking threads. Pass 2 hands packet batches to the async database writer through a
   bounded channel, so a large upload never sits in memory.
+- `dashboard.rs` serves the dashboard's static files with an `index.html` fallback for its
+  client-side routes, and adds the security headers (CSP, `nosniff`, `X-Frame-Options`,
+  `Referrer-Policy`, `Cross-Origin-Opener-Policy`) to every response. Unknown `/api/v1` paths
+  keep their JSON `404`.
+- `healthcheck.rs` implements `flowsentinel-api healthcheck`, a minimal `GET /health` probe used
+  by the container health check, so the image needs no `curl`.
 - `host.rs` refuses requests whose `Host` header is not a name of the server (DNS-rebinding
   protection). `state.rs` holds the import and read semaphores: reads get the database pool
   minus two connections per import slot, so heavy reading cannot starve imports.
@@ -230,19 +237,40 @@ Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/
   alerts with their explanations, or one JSON object. The commands share the capture flags
   through a flattened `CaptureArgs`.
 
+### `frontend/`
+
+The dashboard (see [docs/dashboard.md](docs/dashboard.md)): React 19, React Router and
+TypeScript, built by Vite into static files that `api-server` serves. It talks only to the
+metadata API, same-origin.
+
+- `src/api/schema.ts` is generated from `docs/openapi.json` by `scripts/gen-api-types.mjs`;
+  `src/api/client.ts` is the typed client with structured `ApiError`s and request cancellation.
+- `src/pages/` has one component per route; `src/components/` holds tables, paging, the filter
+  bar (validated by the server as it is typed), SVG bar charts with table equivalents, badges and
+  the protocol tree, which never renders payload-like fields.
+- List state (page, sort, filter) lives in the URL (`useSearchState`); data loading goes through
+  `useResource`, which cancels requests on navigation and exposes loading, error and reload.
+- Tests: Vitest and Testing Library in jsdom with axe-core; Playwright smoke tests in `e2e/`.
+
 ### Infrastructure
 
 - `docker-compose.yml` runs PostgreSQL and Redis bound to loopback, with health checks and
-  passwords required from `.env`.
+  passwords required from `.env`. The optional `app` profile builds the `Dockerfile` (dashboard,
+  then a release `api-server`, on a slim Debian runtime) and runs it as UID 10001 with a
+  read-only root file system, no capabilities and `no-new-privileges`, published on loopback.
 - CI (`.github/workflows/ci.yml`) runs format, clippy (`-D warnings`), tests and build on Linux
-  and Windows. A second job boots the Compose services and waits for them to report healthy.
+  and Windows, the MSRV check, the database tests, and a fixture check. The `compose` job boots
+  the Compose services, then builds and starts the `app` image and checks its health, dashboard,
+  CSP and user. The `frontend` job lints, type-checks, tests and builds the dashboard on Linux
+  and Windows, and the `e2e` job runs the Playwright smoke tests against a real server and
+  database. CI runs on `main` and on `feature/**` branches before they are merged.
 
 ## Planned components
 
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `frontend/` | 8 | React + TypeScript dashboard |
+| `api-server` | 9 | Accounts, roles, sessions and audit logging |
 
 Data will flow in one direction:
 

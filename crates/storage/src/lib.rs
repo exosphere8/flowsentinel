@@ -18,8 +18,8 @@ use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use ingest::{ImportMeta, ImportTransaction, PacketRow};
 pub use models::{
-    AlertRow, DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, PacketDetail, PacketSummary, Paged,
-    RetentionSettings, Session, SessionDetail, TlsEvent, rfc3339_from_nanos,
+    AlertRow, DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, Overview, PacketDetail,
+    PacketSummary, Paged, RetentionSettings, Session, SessionDetail, TlsEvent, rfc3339_from_nanos,
 };
 
 /// Embedded, checksummed migrations from `crates/storage/migrations`.
@@ -457,6 +457,64 @@ impl Storage {
     pub async fn ping(&self) -> Result<(), StorageError> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         Ok(())
+    }
+
+    /// Totals across every stored capture, alert counts and the newest
+    /// captures, all from one snapshot and under the query timeout.
+    pub async fn overview(&self) -> Result<Overview, StorageError> {
+        let mut tx = self.read_transaction().await?;
+        let totals = sqlx::query(
+            "SELECT count(*) AS captures, \
+             COALESCE(sum(packets_processed), 0)::BIGINT AS packets, \
+             COALESCE(sum(flows_total), 0)::BIGINT AS flows, \
+             COALESCE(sum(alerts_total), 0)::BIGINT AS alerts \
+             FROM capture_sessions",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        let groups = sqlx::query(
+            "SELECT severity, status, count(*) AS n FROM alerts GROUP BY severity, status",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let mut overview = Overview {
+            captures: totals.try_get("captures")?,
+            packets_processed: totals.try_get("packets")?,
+            flows_total: totals.try_get("flows")?,
+            alerts_total: totals.try_get("alerts")?,
+            alerts_by_severity: Default::default(),
+            alerts_by_status: Default::default(),
+            open_alerts_by_severity: Default::default(),
+            recent_captures: Vec::new(),
+        };
+        for row in &groups {
+            let severity: String = row.try_get("severity")?;
+            let status: String = row.try_get("status")?;
+            let n: i64 = row.try_get("n")?;
+            *overview
+                .alerts_by_severity
+                .entry(severity.clone())
+                .or_default() += n;
+            *overview.alerts_by_status.entry(status.clone()).or_default() += n;
+            if status == "open" {
+                *overview
+                    .open_alerts_by_severity
+                    .entry(severity)
+                    .or_default() += n;
+            }
+        }
+        let sql = format!(
+            "SELECT {SESSION_COLUMNS} FROM capture_sessions ORDER BY {} LIMIT 5",
+            SessionSort::NewestFirst.sql()
+        );
+        overview.recent_captures = sqlx::query(&sql)
+            .fetch_all(&mut *tx)
+            .await?
+            .iter()
+            .map(session_from_row)
+            .collect::<Result<_, _>>()?;
+        tx.commit().await?;
+        Ok(overview)
     }
 
     pub async fn list_sessions(

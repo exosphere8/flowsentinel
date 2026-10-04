@@ -23,13 +23,22 @@ struct Harness {
 
 impl Harness {
     async fn new(test: &str, max_upload_bytes: u64) -> Option<Self> {
-        Self::with_limits(test, max_upload_bytes, CaptureLimits::default()).await
+        Self::build(test, max_upload_bytes, CaptureLimits::default(), None).await
     }
 
     async fn with_limits(
         test: &str,
         max_upload_bytes: u64,
         capture_limits: CaptureLimits,
+    ) -> Option<Self> {
+        Self::build(test, max_upload_bytes, capture_limits, None).await
+    }
+
+    async fn build(
+        test: &str,
+        max_upload_bytes: u64,
+        capture_limits: CaptureLimits,
+        dashboard_dir: Option<PathBuf>,
     ) -> Option<Self> {
         let db = TestDatabase::create(test).await?;
         let upload_dir = tempfile::tempdir().unwrap();
@@ -42,6 +51,7 @@ impl Harness {
                 flow_config: FlowConfig::default(),
                 host_policy: HostPolicy::default_for("127.0.0.1:8080".parse().unwrap()),
                 detection: DetectionConfig::default(),
+                dashboard_dir,
             },
             1,
         );
@@ -578,6 +588,16 @@ async fn unexpected_host_names_are_refused() {
         let (status, _, _) = h.send(get(host)).await;
         assert_eq!(status, StatusCode::OK, "{host}");
     }
+    // The health check answers any host.
+    let (status, _, _) = h
+        .send(
+            Request::get("/health")
+                .header(header::HOST, "10.1.2.3:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
     h.finish().await;
 }
 
@@ -1066,5 +1086,168 @@ async fn alerts_are_explained_filterable_and_triaged() {
         assert!(!text.contains("payload-marker"), "{uri}");
         assert!(!text.contains("flowsentinel-secret"), "{uri}");
     }
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn overview_totals_every_capture() {
+    let Some(h) = Harness::new("api_overview", 1024 * 1024).await else {
+        return;
+    };
+    let (status, empty) = h.get("/api/v1/overview").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(empty["captures"], 0);
+    assert_eq!(empty["recent_captures"], json!([]));
+    let first = h.upload_fixture("detect-mixed.pcap").await;
+    h.upload_fixture("flows-mixed.pcap").await;
+    let (_, overview) = h.get("/api/v1/overview").await;
+    assert_eq!(overview["captures"], 2);
+    assert_eq!(overview["packets_processed"], 138 + 19);
+    assert_eq!(overview["alerts_total"], 5);
+    assert_eq!(
+        overview["alerts_by_severity"],
+        json!({"high": 2, "medium": 2, "low": 1})
+    );
+    assert_eq!(overview["alerts_by_status"], json!({"open": 5}));
+    let recent = overview["recent_captures"].as_array().unwrap();
+    assert_eq!(recent.len(), 2);
+    assert_eq!(recent[1]["id"], first, "newest first");
+    // Triage moves counts between statuses.
+    let (status, _) = patch_json(
+        &h,
+        &format!("/api/v1/captures/{first}/alerts/1"),
+        r#"{"status":"resolved"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, overview) = h.get("/api/v1/overview").await;
+    assert_eq!(
+        overview["alerts_by_status"],
+        json!({"open": 4, "resolved": 1})
+    );
+    assert_eq!(
+        overview["open_alerts_by_severity"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|v| v.as_i64().unwrap())
+            .sum::<i64>(),
+        4
+    );
+    h.finish().await;
+}
+
+async fn get_raw(
+    h: &Harness,
+    method: Method,
+    uri: &str,
+) -> (StatusCode, String, axum::http::HeaderMap) {
+    let response = h
+        .app()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (
+        status,
+        String::from_utf8_lossy(&bytes).into_owned(),
+        headers,
+    )
+}
+
+#[tokio::test]
+async fn the_dashboard_is_served_with_security_headers() {
+    let dist = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dist.path().join("index.html"),
+        "<!doctype html><title>FlowSentinel</title><script type=\"module\" src=\"/assets/app.js\"></script>",
+    )
+    .unwrap();
+    std::fs::create_dir(dist.path().join("assets")).unwrap();
+    std::fs::write(dist.path().join("assets/app.js"), "console.log(1);").unwrap();
+    let Some(h) = Harness::build(
+        "api_dashboard",
+        1024,
+        CaptureLimits::default(),
+        Some(dist.path().to_owned()),
+    )
+    .await
+    else {
+        return;
+    };
+    // The index and client-side routes get the page.
+    for path in ["/", "/captures/7/packets?filter=tcp", "/settings"] {
+        let (status, body, headers) = get_raw(&h, Method::GET, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(body.contains("<title>FlowSentinel</title>"), "{path}");
+        assert!(
+            headers[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        let csp = headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap();
+        assert!(csp.contains("script-src 'self'") && csp.contains("frame-ancestors 'none'"));
+        assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        assert_eq!(headers[header::X_FRAME_OPTIONS], "DENY");
+        assert_eq!(headers[header::REFERRER_POLICY], "no-referrer");
+        // Revalidated on every load, so an upgrade takes effect at once.
+        assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{path}");
+    }
+    let (status, body, headers) = get_raw(&h, Method::GET, "/assets/app.js").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "console.log(1);");
+    assert!(
+        headers[header::CONTENT_TYPE]
+            .to_str()
+            .unwrap()
+            .contains("javascript")
+    );
+    assert_eq!(
+        headers[header::CACHE_CONTROL],
+        "public, max-age=31536000, immutable"
+    );
+    // A missing asset is not answered with the page (which a browser would
+    // try to run as a script), and the 404 is not cached.
+    let (status, body, headers) = get_raw(&h, Method::GET, "/assets/old-build.js").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(!body.contains("<title>"));
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // No path under /api/ is ever answered with the page.
+    for path in ["/api", "/api/", "/api/v1/", "/api/v2/captures"] {
+        let (status, body, headers) = get_raw(&h, Method::GET, path).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert!(body.contains("\"not_found\""), "{path}: {body}");
+        assert!(
+            headers[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with("application/json"),
+            "{path}"
+        );
+    }
+    // The API keeps its JSON errors and headers.
+    let (status, body) = h.get("/api/v1/no-such-endpoint").await;
+    assert_eq!(
+        (status, error_code(&body)),
+        (StatusCode::NOT_FOUND, "not_found")
+    );
+    let (status, _, headers) = get_raw(&h, Method::GET, "/api/v1/rules").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    // Static files are read-only, and nothing outside the directory is served.
+    let (status, _, _) = get_raw(&h, Method::POST, "/").await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let (status, body, _) = get_raw(&h, Method::GET, "/assets/../../../../etc/passwd").await;
+    assert!(!body.contains("root:"), "{status}");
     h.finish().await;
 }

@@ -96,11 +96,16 @@ fn is_port(text: &str) -> bool {
 }
 
 /// Middleware: answers `421 Misdirected Request` for unexpected hosts.
+/// `/health` reveals nothing and is answered for any host, so load
+/// balancers and container checks can probe it by address.
 pub async fn guard(
     State(policy): State<Arc<HostPolicy>>,
     request: Request,
     next: Next,
 ) -> Response {
+    if request.uri().path() == "/health" {
+        return next.run(request).await;
+    }
     let host = request
         .headers()
         .get(header::HOST)

@@ -35,11 +35,11 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 7)
+## Current security posture (Milestone 8)
 
-- The API binds to `127.0.0.1` by default and has **no authentication yet**. Anyone who can reach
-  it can import, read and delete captures, change alert statuses and change retention. Do not
-  expose it to a network.
+- The API and the dashboard bind to `127.0.0.1` by default and have **no authentication yet**.
+  Anyone who can reach them can import, read and delete captures, change alert statuses and
+  change retention. Do not expose them to a network.
   The server logs a warning if configured to listen on a non-loopback address.
 - The API sends no CORS headers, and every state-changing request needs a non-simple content
   type (uploads require `application/vnd.tcpdump.pcap` or `application/octet-stream`) or method
@@ -57,6 +57,19 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   time, each holding its slot until its analysis threads finish, and each is analyzed under
   packet, time and flow limits. Reads use the database pool minus connections reserved for
   imports, and shutdown waits at most 30 seconds for running requests.
+- Every response carries a strict Content Security Policy (same-origin scripts, styles and
+  connections only; no inline scripts, plugins or framing), `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
+  `Cross-Origin-Opener-Policy: same-origin`. The dashboard renders all capture-derived text
+  (file names, DNS names, HTTP paths, TLS server names) as text, never as HTML; ESLint rejects
+  `dangerouslySetInnerHTML`, `innerHTML` and `outerHTML`. It refuses to render payload-like
+  fields even if the API were to send them. It loads nothing from third-party origins. Details:
+  [docs/dashboard.md](docs/dashboard.md).
+- The container image (`Dockerfile`, Compose `app` profile) runs the server as an unprivileged
+  user (UID 10001), with a read-only root file system, all Linux capabilities dropped and
+  `no-new-privileges`; only the upload volume is writable, and the port is published on
+  `127.0.0.1`. Its health check uses the server binary itself, so the image contains no shell
+  tools for it.
 - Storage is metadata only: no table has a column that can hold payload bytes, and the redaction
   rules of the decoder apply to everything stored. Integration tests import every application
   fixture and check that no secret or payload marker reaches the database or any API response.
