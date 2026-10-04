@@ -6,6 +6,7 @@ members = [
     "crates/capture",
     "crates/cli",
     "crates/decoder",
+    "crates/detection-engine",
     "crates/filter-language",
     "crates/flow-engine",
     "crates/storage",
@@ -27,6 +28,7 @@ publish = false
 analysis = { path = "crates/analysis" }
 capture = { path = "crates/capture" }
 decoder = { path = "crates/decoder" }
+detection-engine = { path = "crates/detection-engine" }
 filter-language = { path = "crates/filter-language" }
 flow-engine = { path = "crates/flow-engine" }
 storage = { path = "crates/storage" }
@@ -43,6 +45,8 @@ sha2 = "0.11.0"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "ipnetwork"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
+# 1.x supports the workspace's Rust 1.85 minimum.
+toml = "1.1.6"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"

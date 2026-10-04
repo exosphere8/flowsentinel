@@ -36,6 +36,11 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
 - **Milestone 6, display filters:** packet and flow lists accept Wireshark-like filters such as
   `ip.addr == 192.0.2.0/24 and tls.sni contains "example"`. Filters are type-checked against a
   field catalog, report errors with positions, and are translated into parameterized SQL.
+- **Milestone 7, explainable detections:** `flowsentinel detect --pcap` and every API import run
+  twelve configurable rules (scans, failed connections, beaconing, rare ports, large outbound
+  transfers, cleartext logins, DNS volume and tunneling, ARP conflicts and floods). Each alert is
+  a heuristic indicator with its evidence, cited flows or packets, uncertainty and likely false
+  positives, never a verdict. Analysts triage alerts through the API.
 
 ## Quick start
 
@@ -64,6 +69,7 @@ curl -X POST -H 'Content-Type: application/vnd.tcpdump.pcap' \
   'http://127.0.0.1:8080/api/v1/captures?file_name=flows-mixed.pcap'
 curl 'http://127.0.0.1:8080/api/v1/captures/1/flows?sort=-bytes'
 curl -G 'http://127.0.0.1:8080/api/v1/captures/1/packets' --data-urlencode 'filter=tcp.port == 443'
+curl 'http://127.0.0.1:8080/api/v1/captures/1/alerts'
 
 cargo run -p cli -- --version
 # flowsentinel 0.1.0
@@ -137,6 +143,26 @@ Both directions of a conversation form one flow. The initiator comes from the TC
 one is seen, otherwise from the first packet, never from address order. See
 [docs/flow-engine.md](docs/flow-engine.md) for statistics, timeouts, memory limits and JSON.
 
+### Run the detection rules
+
+```bash
+cargo run -p cli -- detect --pcap fixtures/pcap/detect-mixed.pcap
+cargo run -p cli -- detect --pcap fixtures/pcap/detect-mixed.pcap --config config/detection.example.toml --json
+```
+
+```text
+Alerts are heuristic indicators: observed patterns to review, not proof of compromise.
+
+[1] Possible SYN scan (FS-SCAN-SYN), medium severity, medium confidence
+  When       2026-01-01T00:00:01.000000Z
+  Endpoints  192.0.2.66 -> 198.51.100.20
+  Evidence   distinct_ports_unanswered_or_refused=25, threshold=20, window=60 s
+  ...
+```
+
+Every alert explains what was measured, why it may be wrong and which benign activity looks the
+same. See [docs/detection-rules.md](docs/detection-rules.md) for the rules, thresholds and limits.
+
 ### Windows note
 
 When a checkout sits in a deeply nested folder, Cargo's build-script paths can exceed the classic
@@ -162,6 +188,7 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time per import's first pass |
 | `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | `Host` names the API answers (comma-separated, or `*`) |
 | `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS` | 10 | Time limit for one filtered list query |
+| `FLOWSENTINEL_DETECTION_CONFIG` | built-in thresholds | Detection thresholds (TOML; see `config/detection.example.toml`) |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -192,9 +219,11 @@ crates/
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
   decoder/      Bounds-checked protocol and application-metadata decoder
+  detection-engine/  Explainable heuristic rules over flows, DNS and ARP metadata
   filter-language/  Display-filter lexer, parser, type checker and SQL translation
   flow-engine/  Bidirectional flow reconstruction with bounded memory
   storage/      PostgreSQL persistence (SQLx, embedded migrations, retention)
+config/         Example configuration (detection thresholds)
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
@@ -213,7 +242,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 4 | Bidirectional flow reconstruction | Done |
 | 5 | PostgreSQL persistence and REST API | Done |
 | 6 | Display-filter language | Done |
-| 7 | Explainable rule-based detection | Planned |
+| 7 | Explainable rule-based detection | Done |
 | 8 | React dashboard | Planned |
 | 9 | Authentication, RBAC and auditing | Planned |
 | 10 | Authorized live capture | Planned |

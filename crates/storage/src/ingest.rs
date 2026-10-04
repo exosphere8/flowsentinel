@@ -5,10 +5,12 @@
 //! readers until [`ImportTransaction::commit`]; dropping the transaction
 //! instead rolls everything back.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
 
 use analysis::{Analysis, AnalyzedPacket};
 use decoder::{DecodedPacket, Layer};
+use detection_engine::{Alert, Severity};
 use flow_engine::FlowRecord;
 use sqlx::{Postgres, QueryBuilder, Transaction};
 
@@ -249,8 +251,17 @@ impl Storage {
     ) -> Result<ImportTransaction, StorageError> {
         let mut tx = self.pool.begin().await?;
         let session_id = insert_session(&mut tx, analysis, meta).await?;
+        let alerts: &[Alert] = analysis
+            .detection
+            .as_ref()
+            .map_or(&[], |d| d.alerts.as_slice());
+        let severities: HashMap<u64, Severity> =
+            alerts.iter().map(|a| (a.alert_id, a.severity)).collect();
         for chunk in analysis.flows.flows.chunks(BATCH_ROWS) {
-            insert_flows(&mut tx, session_id, chunk).await?;
+            insert_flows(&mut tx, session_id, chunk, &severities).await?;
+        }
+        for chunk in alerts.chunks(BATCH_ROWS) {
+            insert_alerts(&mut tx, session_id, chunk).await?;
         }
         Ok(ImportTransaction {
             tx,
@@ -308,9 +319,10 @@ async fn insert_session(
          completion_state, pcap_version, endianness, timestamp_resolution, link_type, \
          link_type_name, snap_length, packets_processed, packets_stored, captured_bytes_total, \
          original_bytes_total, first_packet_ns, last_packet_ns, flows_total, flows_stored, \
-         capture_warnings, decode_summary, flow_summary, expires_at) \
+         capture_warnings, decode_summary, flow_summary, alerts_total, detection_summary, \
+         expires_at) \
          VALUES ($1, $2, $3, 'upload', $4, $5, $6, $7, $8, $9, $10, $11, 0, $12, $13, $14, $15, \
-         $16, $17, $18, $19, $20, now() + make_interval(days => $21)) RETURNING id",
+         $16, $17, $18, $19, $20, $21, $22, now() + make_interval(days => $23)) RETURNING id",
     )
     .bind(&meta.file_name)
     .bind(clamp_i64(s.file_size_bytes))
@@ -332,6 +344,16 @@ async fn insert_session(
     .bind(to_json(&analysis.report.warnings)?)
     .bind(to_json(&analysis.decode_summary)?)
     .bind(to_json(&analysis.flows.summary)?)
+    .bind(
+        analysis
+            .detection
+            .as_ref()
+            .map_or(0, |d| clamp_i64(d.summary.alerts_total)),
+    )
+    .bind(match &analysis.detection {
+        Some(d) => to_json(&d.summary)?,
+        None => serde_json::json!({}),
+    })
     .bind(meta.ttl_days)
     .fetch_one(&mut **tx)
     .await?;
@@ -351,19 +373,32 @@ async fn insert_flows(
     tx: &mut Transaction<'static, Postgres>,
     session_id: i64,
     flows: &[FlowRecord],
+    severities: &HashMap<u64, Severity>,
 ) -> Result<(), StorageError> {
     let mut rows = Vec::with_capacity(flows.len());
     for flow in flows {
-        rows.push((flow, to_json(flow)?, variant_name(&flow.dominant_endpoint)?));
+        let highest = flow
+            .alert_ids
+            .iter()
+            .filter_map(|id| severities.get(id))
+            .max()
+            .map(|s| s.as_str());
+        rows.push((
+            flow,
+            to_json(flow)?,
+            variant_name(&flow.dominant_endpoint)?,
+            highest,
+        ));
     }
     let mut builder = QueryBuilder::<Postgres>::new(
         "INSERT INTO flows (session_id, flow_id, ip_version, protocol, protocol_name, \
          initiator_ip, initiator_port, responder_ip, responder_port, first_seen_ns, \
          last_seen_ns, duration_seconds, packets_total, bytes_total, packets_initiator, \
          packets_responder, bytes_initiator, bytes_responder, tcp_state, end_reason, \
-         dominant_endpoint, application_protocols, dns_query, http_host, tls_sni, record) ",
+         dominant_endpoint, application_protocols, dns_query, http_host, tls_sni, record, \
+         alert_count, max_alert_severity) ",
     );
-    builder.push_values(rows, |mut b, (f, record, dominant)| {
+    builder.push_values(rows, |mut b, (f, record, dominant, highest)| {
         let app = &f.application;
         b.push_bind(session_id)
             .push_bind(clamp_i64(f.flow_id))
@@ -390,7 +425,71 @@ async fn insert_flows(
             .push_bind(app.dns_queries.first().cloned())
             .push_bind(app.http_hosts.first().cloned())
             .push_bind(app.tls_server_names.first().cloned())
-            .push_bind(record);
+            .push_bind(record)
+            .push_bind(i32::try_from(f.alert_ids.len()).unwrap_or(i32::MAX))
+            .push_bind(highest);
+    });
+    builder.build().execute(&mut **tx).await?;
+    Ok(())
+}
+
+fn severity_rank(severity: Severity) -> i16 {
+    match severity {
+        Severity::Low => 1,
+        Severity::Medium => 2,
+        Severity::High => 3,
+    }
+}
+
+async fn insert_alerts(
+    tx: &mut Transaction<'static, Postgres>,
+    session_id: i64,
+    alerts: &[Alert],
+) -> Result<(), StorageError> {
+    if alerts.is_empty() {
+        return Ok(());
+    }
+    let mut rows = Vec::with_capacity(alerts.len());
+    for alert in alerts {
+        rows.push((alert, to_json(&alert.evidence)?));
+    }
+    let mut builder = QueryBuilder::<Postgres>::new(
+        "INSERT INTO alerts (session_id, alert_id, rule_id, rule_name, severity, severity_rank, \
+         confidence, status, first_seen_ns, last_seen_ns, source, destination, destination_port, \
+         related_flow_ids, related_packet_indexes, evidence, explanation, uncertainty, \
+         likely_false_positives, mitre_attack) ",
+    );
+    builder.push_values(rows, |mut b, (a, evidence)| {
+        b.push_bind(session_id)
+            .push_bind(clamp_i64(a.alert_id))
+            .push_bind(a.rule_id)
+            .push_bind(a.rule_name)
+            .push_bind(a.severity.as_str())
+            .push_bind(severity_rank(a.severity))
+            .push_bind(a.confidence.as_str())
+            .push_bind(a.status.as_str())
+            .push_bind(nanos(a.first_seen))
+            .push_bind(nanos(a.last_seen))
+            .push_bind(a.source)
+            .push_bind(a.destination)
+            .push_bind(a.destination_port.map(i32::from))
+            .push_bind(
+                a.related_flow_ids
+                    .iter()
+                    .map(|&id| clamp_i64(id))
+                    .collect::<Vec<_>>(),
+            )
+            .push_bind(
+                a.related_packet_indexes
+                    .iter()
+                    .map(|&id| clamp_i64(id))
+                    .collect::<Vec<_>>(),
+            )
+            .push_bind(evidence)
+            .push_bind(a.explanation.clone())
+            .push_bind(a.uncertainty)
+            .push_bind(a.likely_false_positives.to_vec())
+            .push_bind(a.mitre_attack.to_vec());
     });
     builder.build().execute(&mut **tx).await?;
     Ok(())

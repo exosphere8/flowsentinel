@@ -83,8 +83,10 @@ masked out of `class`. Authority and additional records are counted but not list
 
 Names are shown in presentation format: `.` and `\` inside a label are escaped, and non-printable
 bytes are shown as `\DDD`. A name may be at most 255 wire octets. Escaping can make a name up to
-four times longer, so a shown name is cut at 255 characters (ending in `...`). All names and answer
-data of one message share a budget of 2,048 characters. When it runs out, no further answers are
+four times longer, so a longer name is shown in at most 255 characters: its start, `...`, and its
+last two labels (each cut to 63 characters), for example `\200\201\202....evil.example`, so the
+parent domain stays visible. All names and answer data of one message share a budget of 2,048
+characters. When it runs out, no further answers are
 listed and `application_limit_reached` is added.
 
 **Compression-loop protection.** Each pointer must target an offset strictly lower than every

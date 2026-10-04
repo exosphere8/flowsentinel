@@ -1,6 +1,7 @@
 //! `flowsentinel` command-line interface.
 
 mod decode_view;
+mod detect;
 mod exit;
 mod flows;
 mod inspect;
@@ -47,6 +48,37 @@ enum Command {
     /// Exit codes: 0 success (including partial results at a limit),
     /// 2 usage error, 3 rejected input, 4 malformed capture, 5 I/O error.
     Flows(FlowsArgs),
+
+    /// Run the detection rules over an offline classic PCAP file.
+    ///
+    /// Decodes every packet, reconstructs flows and applies the rules
+    /// (scans, DNS tunneling and volume, beaconing, rare ports, large
+    /// outbound transfers, failed connections, cleartext logins, ARP
+    /// anomalies). Every alert is a heuristic indicator to review, not proof
+    /// of compromise; each one explains its evidence, uncertainty and likely
+    /// benign causes. Packet contents are never printed.
+    ///
+    /// Exit codes: 0 success (including partial results at a limit; alerts
+    /// do not change the exit code), 2 usage error or invalid --config,
+    /// 3 rejected input, 4 malformed capture, 5 I/O error.
+    Detect(DetectArgs),
+}
+
+#[derive(Debug, Args)]
+struct DetectArgs {
+    #[command(flatten)]
+    capture: CaptureArgs,
+
+    /// TOML file with rule thresholds (see config/detection.example.toml).
+    /// Missing settings use the defaults.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
+
+    /// Print one JSON object on stdout instead of tables. Capture errors are
+    /// also printed as JSON on stdout; invalid options are reported as text
+    /// on stderr.
+    #[arg(long)]
+    json: bool,
 }
 
 /// Input file and processing limits shared by every command.
@@ -208,6 +240,7 @@ fn main() -> ExitCode {
     match cli.command {
         Some(Command::Inspect(args)) => inspect::run(&args),
         Some(Command::Flows(args)) => flows::run(&args),
+        Some(Command::Detect(args)) => detect::run(&args),
         None => match Cli::command().print_help() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {

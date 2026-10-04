@@ -1,0 +1,96 @@
+# FlowSentinel detection thresholds.
+#
+# Every value below is the built-in default; delete what you do not change.
+# Unknown keys and out-of-range values are rejected when the file is loaded.
+#
+#   flowsentinel detect --pcap capture.pcap --config detection.toml
+#   FLOWSENTINEL_DETECTION_CONFIG=/etc/flowsentinel/detection.toml   (API server)
+#
+# Alerts are heuristic indicators that deserve review, not proof of
+# compromise. See docs/detection-rules.md.
+
+# Networks treated as internal by direction-aware rules (FS-OUTBOUND-RATIO).
+# The documentation range 192.0.2.0/24 is included so the synthetic fixtures
+# have an inside; replace the list with your own networks.
+internal_networks = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "192.0.2.0/24",
+    "fc00::/7",
+    "fe80::/10",
+    "::1/128",
+]
+
+# FS-SCAN-SYN: refused or unanswered TCP handshakes to many ports of one host.
+[syn_scan]
+enabled = true
+window_seconds = 60
+min_ports = 20
+
+# FS-SCAN-PORTS: many ports of one host contacted, any outcome.
+[port_sweep]
+enabled = true
+window_seconds = 60
+min_ports = 50
+
+# FS-SCAN-HOSTS: one port contacted on many hosts.
+[horizontal_scan]
+enabled = true
+window_seconds = 60
+min_hosts = 20
+
+# FS-DNS-VOLUME: many DNS queries from one client.
+[dns_volume]
+enabled = true
+window_seconds = 60
+min_queries = 200
+
+# FS-DNS-TUNNEL: long, high-entropy or TXT/NULL queries under one parent domain.
+[dns_tunneling]
+enabled = true
+window_seconds = 300
+min_long_queries = 10
+min_label_length = 40
+min_name_length = 100
+min_entropy_bits = 3.8
+min_unique_subdomains = 30
+
+# FS-BEACON: connections to the same destination and port at regular intervals.
+[beaconing]
+enabled = true
+min_connections = 6
+max_jitter_ratio = 0.1
+min_interval_seconds = 10.0
+
+# FS-RARE-PORT: an answered destination port almost no other flow used.
+[rare_destination_port]
+enabled = true
+min_flows = 50
+max_occurrences = 1
+
+# FS-OUTBOUND-RATIO: an internal host sending far more than it receives.
+[outbound_ratio]
+enabled = true
+min_bytes_out = 1000000
+min_ratio = 10.0
+
+# FS-TCP-FAIL: many refused or unanswered TCP connection attempts.
+[tcp_failures]
+enabled = true
+window_seconds = 60
+min_failures = 30
+
+# FS-CLEARTEXT: answered connections to cleartext login protocols
+# (FTP, Telnet, POP3, IMAP, rlogin, rsh).
+[cleartext]
+enabled = true
+ports = [21, 23, 110, 143, 513, 514]
+
+# FS-ARP-CONFLICT and FS-ARP-GRATUITOUS.
+[arp]
+enabled = true
+window_seconds = 60
+min_gratuitous = 20

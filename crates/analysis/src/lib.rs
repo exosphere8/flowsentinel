@@ -25,6 +25,7 @@ use capture::{
     PacketSink, PcapGlobalHeader, inspect_file_with_sink,
 };
 use decoder::{DecodeSummary, DecodedPacket, decode_packet};
+use detection_engine::{DetectionReport, Detector};
 use flow_engine::{FlowConfig, FlowEngine, FlowPacket, FlowReport};
 
 /// What to run and how much to keep.
@@ -54,7 +55,11 @@ pub struct Analysis {
     /// are not kept (`report.packets` is empty).
     pub report: CaptureReport,
     pub decode_summary: DecodeSummary,
+    /// Finished flows; with detection, each carries the IDs of the alerts
+    /// that cite it.
     pub flows: FlowReport,
+    /// Alerts, when detection ran ([`analyze_file_with_detection`]).
+    pub detection: Option<DetectionReport>,
     /// How many packets [`replay_packets`] will yield: the smaller of
     /// [`AnalysisConfig::replay_packets`] and the packets processed.
     pub replayable_packets: u64,
@@ -118,6 +123,7 @@ struct FirstPass {
     summary: DecodeSummary,
     replay_packets: u64,
     fingerprint: Fingerprint,
+    detector: Option<Detector>,
 }
 
 impl PacketSink for FirstPass {
@@ -132,12 +138,15 @@ impl PacketSink for FirstPass {
         }
         let decoded = decode_packet(self.link_type, data, record.original_length);
         self.summary.add(record.index, &decoded);
-        self.engine.process(&FlowPacket {
+        let flow = self.engine.process(&FlowPacket {
             index: record.index,
             timestamp: record.timestamp,
             wire_length: record.original_length,
             decoded: &decoded,
         });
+        if let Some(detector) = self.detector.as_mut() {
+            detector.observe_packet(record.index, record.timestamp, &decoded, flow);
+        }
     }
 }
 
@@ -148,21 +157,47 @@ pub fn analyze_file(
     config: &AnalysisConfig,
     clock: &dyn Clock,
 ) -> Result<Analysis, CaptureError> {
+    first_pass(path, config, clock, None)
+}
+
+/// Like [`analyze_file`], also running the detection rules over every
+/// packet and the finished flows.
+pub fn analyze_file_with_detection(
+    path: &Path,
+    config: &AnalysisConfig,
+    detector: Detector,
+    clock: &dyn Clock,
+) -> Result<Analysis, CaptureError> {
+    first_pass(path, config, clock, Some(detector))
+}
+
+fn first_pass(
+    path: &Path,
+    config: &AnalysisConfig,
+    clock: &dyn Clock,
+    detector: Option<Detector>,
+) -> Result<Analysis, CaptureError> {
     let mut pass = FirstPass {
         link_type: 0,
         engine: FlowEngine::new(config.flows),
         summary: DecodeSummary::default(),
         replay_packets: config.replay_packets,
         fingerprint: Fingerprint::default(),
+        detector,
     };
     let mut report = inspect_file_with_sink(path, &config.limits, clock, Some(&mut pass))?;
     // The per-record list grows with the capture; nothing downstream needs it.
     report.packets = Vec::new();
     let replayable_packets = config.replay_packets.min(report.summary.packets_processed);
+    let mut flows = pass.engine.finish();
+    let detection = pass
+        .detector
+        .map(|detector| detector.finish(&mut flows.flows));
     Ok(Analysis {
         report,
         decode_summary: pass.summary,
-        flows: pass.engine.finish(),
+        flows,
+        detection,
         replayable_packets,
         fingerprint: pass.fingerprint.value(),
     })

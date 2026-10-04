@@ -282,13 +282,14 @@ fn summarize(
 }
 
 /// Reads a possibly compressed name starting at `start`. Returns the
-/// presentation-format name, shortened to [`MAX_NAME_CHARS`] (ending in
-/// `...`), and the offset just after the name's encoding at `start` (after
-/// the first pointer, if any).
+/// presentation-format name and the offset just after the name's encoding
+/// at `start` (after the first pointer, if any).
 ///
-/// The whole encoding is validated, but text is only built up to the
-/// character limit, so the work per name is bounded however the labels are
-/// encoded.
+/// A name longer than [`MAX_NAME_CHARS`] keeps its start and its last two
+/// labels, with `...` in between (`a1b2c3...\200\201.evil.example`), so the
+/// parent domain stays visible. The encoding is at most 255 octets in at
+/// most 128 labels, so the work per name is bounded however it is
+/// compressed.
 pub(crate) fn read_name(message: &[u8], start: usize) -> Result<(String, usize), Fail> {
     let mut pos = start;
     // Lowest offset visited so far; pointers must jump strictly below it.
@@ -296,8 +297,8 @@ pub(crate) fn read_name(message: &[u8], start: usize) -> Result<(String, usize),
     let mut jumps = 0;
     let mut end = None;
     let mut octets = 0;
-    let mut name = String::new();
-    let mut shortened = false;
+    // (offset, length) of each label, in order; at most 128 fit in 255 octets.
+    let mut labels: Vec<(usize, usize)> = Vec::new();
     loop {
         let len = u8_at(message, pos).ok_or(Fail::Short)?;
         match len & 0xC0 {
@@ -307,30 +308,15 @@ pub(crate) fn read_name(message: &[u8], start: usize) -> Result<(String, usize),
                     return Err(Fail::Bad);
                 }
                 let end = end.unwrap_or(pos + 1);
-                if name.is_empty() {
-                    name.push('.');
-                }
-                return Ok((name, end));
+                return Ok((present_name(message, &labels), end));
             }
             0x00 => {
-                let label = slice(message, pos + 1, usize::from(len)).ok_or(Fail::Short)?;
+                slice(message, pos + 1, usize::from(len)).ok_or(Fail::Short)?;
                 octets += usize::from(len) + 1;
                 if octets > MAX_NAME_OCTETS {
                     return Err(Fail::Bad);
                 }
-                if !shortened {
-                    if !name.is_empty() {
-                        name.push('.');
-                    }
-                    push_label(&mut name, label);
-                    if name.len() > MAX_NAME_CHARS {
-                        // Names are ASCII (non-printable bytes are escaped),
-                        // so any byte index is a character boundary.
-                        name.truncate(MAX_NAME_CHARS - 3);
-                        name.push_str("...");
-                        shortened = true;
-                    }
-                }
+                labels.push((pos + 1, usize::from(len)));
                 pos += usize::from(len) + 1;
             }
             0xC0 => {
@@ -382,6 +368,69 @@ fn skip_name(message: &[u8], start: usize) -> Result<usize, Fail> {
 
 /// Appends a label in DNS presentation format: printable characters as is,
 /// `.` and `\` escaped, everything else as `\DDD`.
+/// Presentation form of `labels`, shortened to [`MAX_NAME_CHARS`] when
+/// needed by keeping the start and the last two labels.
+fn present_name(message: &[u8], labels: &[(usize, usize)]) -> String {
+    let label = |&(at, len): &(usize, usize)| slice(message, at, len).unwrap_or_default();
+    let mut full = String::new();
+    for (i, item) in labels.iter().enumerate() {
+        if i > 0 {
+            full.push('.');
+        }
+        push_label(&mut full, label(item));
+    }
+    if labels.is_empty() {
+        return ".".to_owned();
+    }
+    if full.len() <= MAX_NAME_CHARS {
+        return full;
+    }
+    // The parent domain: the last two labels, each at most 63 characters.
+    let split = labels.len().saturating_sub(2);
+    let mut tail = String::new();
+    for (i, item) in labels.get(split..).unwrap_or_default().iter().enumerate() {
+        if i > 0 {
+            tail.push('.');
+        }
+        push_label_limited(&mut tail, label(item), MAX_TAIL_LABEL_CHARS);
+    }
+    let budget = MAX_NAME_CHARS.saturating_sub(tail.len() + 4);
+    let mut head = String::new();
+    for (i, item) in labels.get(..split).unwrap_or_default().iter().enumerate() {
+        if i > 0 {
+            head.push('.');
+        }
+        let room = budget.saturating_sub(head.len());
+        push_label_limited(&mut head, label(item), room);
+        if head.len() >= budget {
+            break;
+        }
+    }
+    // Names are ASCII (non-printable bytes are escaped), so any byte index
+    // is a character boundary.
+    head.truncate(budget);
+    format!("{head}....{tail}")
+}
+
+/// Longest label kept in the tail of a shortened name.
+const MAX_TAIL_LABEL_CHARS: usize = 63;
+
+/// Like [`push_label`], but stops before exceeding `max` characters and
+/// never splits an escape sequence.
+fn push_label_limited(out: &mut String, label: &[u8], max: usize) {
+    let mut unit = String::new();
+    let mut used = 0;
+    for &b in label {
+        unit.clear();
+        push_label(&mut unit, &[b]);
+        if used + unit.len() > max {
+            return;
+        }
+        used += unit.len();
+        out.push_str(&unit);
+    }
+}
+
 fn push_label(out: &mut String, label: &[u8]) {
     for &b in label {
         match b {
@@ -579,9 +628,40 @@ mod tests {
         msg.push(0);
         let (name, end) = read_name(&msg, 0).unwrap();
         assert_eq!(end, 255);
-        assert_eq!(name.len(), MAX_NAME_CHARS);
+        assert!(name.len() <= MAX_NAME_CHARS, "{}", name.len());
         assert!(name.starts_with("\\255\\255"));
-        assert!(name.ends_with("..."));
+        assert!(name.contains("...."));
+        // The last two labels are kept (shortened to 63 characters each,
+        // whole escapes only).
+        let tail = name.rsplit("....").next().unwrap();
+        assert_eq!(tail.split('.').count(), 2);
+        assert!(tail.split('.').all(|l| l.len() <= 63 && l.len() % 4 == 0));
+    }
+
+    #[test]
+    fn shortened_names_keep_the_parent_domain() {
+        // Two 60-octet labels of 8-bit bytes under t.evil.example: 4
+        // characters per byte when escaped.
+        let mut msg = Vec::new();
+        for _ in 0..2 {
+            msg.push(60);
+            msg.extend(std::iter::repeat_n(0xC8, 60));
+        }
+        for label in ["t", "evil", "example"] {
+            msg.push(u8::try_from(label.len()).unwrap());
+            msg.extend(label.bytes());
+        }
+        msg.push(0);
+        let (name, _) = read_name(&msg, 0).unwrap();
+        assert!(name.len() <= MAX_NAME_CHARS);
+        assert!(name.starts_with("\\200\\200"), "{name}");
+        assert!(name.ends_with("....evil.example"), "{name}");
+        // A name that fits is unchanged.
+        let short = [
+            3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm',
+            0,
+        ];
+        assert_eq!(read_name(&short, 0).unwrap().0, "www.example.com");
     }
 
     #[test]

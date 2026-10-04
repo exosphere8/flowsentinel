@@ -9,6 +9,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
 use capture::CaptureLimits;
+use detection_engine::DetectionConfig;
 use flow_engine::FlowConfig;
 use serde_json::{Value, json};
 use storage::testing::TestDatabase;
@@ -40,6 +41,7 @@ impl Harness {
                 capture_limits,
                 flow_config: FlowConfig::default(),
                 host_policy: HostPolicy::default_for("127.0.0.1:8080".parse().unwrap()),
+                detection: DetectionConfig::default(),
             },
             1,
         );
@@ -447,6 +449,7 @@ async fn responses_never_contain_payloads_or_secrets() {
         "app-http.pcap",
         "app-tls.pcap",
         "flows-mixed.pcap",
+        "detect-mixed.pcap",
     ] {
         let id = h.upload_fixture(name).await;
         for path in [
@@ -456,6 +459,7 @@ async fn responses_never_contain_payloads_or_secrets() {
             "/dns",
             "/http",
             "/tls",
+            "/alerts?per_page=500",
         ] {
             let (status, body) = h.get(&format!("/api/v1/captures/{id}{path}")).await;
             assert_eq!(status, StatusCode::OK);
@@ -481,8 +485,19 @@ async fn responses_never_contain_payloads_or_secrets() {
                 .await;
             text.push_str(&detail.to_string());
         }
+        let (_, alerts) = h
+            .get(&format!("/api/v1/captures/{id}/alerts?per_page=500"))
+            .await;
+        for alert in alerts["items"].as_array().unwrap() {
+            let alert_id = &alert["alert_id"];
+            let (_, detail) = h
+                .get(&format!("/api/v1/captures/{id}/alerts/{alert_id}"))
+                .await;
+            text.push_str(&detail.to_string());
+        }
     }
     let lower = text.to_ascii_lowercase();
+    assert!(lower.contains("fs-dns-tunnel"), "alerts were fetched");
     assert!(lower.contains("www.example.com"));
     assert!(!lower.contains("flowsentinel-secret"));
     assert!(!lower.contains("flowsentinel-synthetic-payload-marker"));
@@ -509,10 +524,14 @@ async fn openapi_document_lists_every_endpoint() {
         "/api/v1/captures/{id}/http",
         "/api/v1/captures/{id}/tls",
         "/api/v1/settings/retention",
+        "/api/v1/captures/{id}/alerts",
+        "/api/v1/captures/{id}/alerts/{alert_id}",
+        "/api/v1/rules",
     ] {
         assert!(paths.contains_key(path), "{path}");
     }
     assert!(paths["/api/v1/captures"]["post"].is_object());
+    assert!(paths["/api/v1/captures/{id}/alerts/{alert_id}"]["patch"].is_object());
     assert!(doc["components"]["schemas"]["ErrorResponse"].is_object());
     let (status, _, _) = h
         .send(
@@ -809,5 +828,243 @@ async fn filters_can_be_validated_and_fields_listed() {
             .unwrap()
             .contains(&json!("established"))
     );
+    h.finish().await;
+}
+
+async fn patch_json(h: &Harness, uri: &str, body: &str) -> (StatusCode, Value) {
+    let (status, body, _) = h
+        .send(
+            Request::patch(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body.to_owned()))
+                .unwrap(),
+        )
+        .await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn alerts_are_explained_filterable_and_triaged() {
+    let Some(h) = Harness::new("api_alerts", 1024 * 1024).await else {
+        return;
+    };
+    let id = h.upload_fixture("detect-mixed.pcap").await;
+    let (_, capture) = h.get(&format!("/api/v1/captures/{id}")).await;
+    assert_eq!(capture["alerts_total"], 5, "{capture}");
+    assert_eq!(capture["detection_summary"]["alerts_total"], 5);
+
+    let base = format!("/api/v1/captures/{id}/alerts");
+    let (status, page) = h.get(&base).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["total"], 5);
+    let items = page["items"].as_array().unwrap();
+    let mut rules: Vec<&str> = items
+        .iter()
+        .map(|a| a["rule_id"].as_str().unwrap())
+        .collect();
+    rules.sort_unstable();
+    assert_eq!(
+        rules,
+        [
+            "FS-ARP-CONFLICT",
+            "FS-BEACON",
+            "FS-CLEARTEXT",
+            "FS-DNS-TUNNEL",
+            "FS-SCAN-SYN"
+        ]
+    );
+    // Default order: most severe first.
+    let ranks: Vec<u8> = items
+        .iter()
+        .map(|a| match a["severity"].as_str().unwrap() {
+            "high" => 3,
+            "medium" => 2,
+            _ => 1,
+        })
+        .collect();
+    assert!(ranks.windows(2).all(|w| w[0] >= w[1]), "{ranks:?}");
+    for alert in items {
+        assert!(
+            alert["nature"]
+                .as_str()
+                .unwrap()
+                .contains("not proof of compromise")
+        );
+        assert!(!alert["evidence"].as_array().unwrap().is_empty(), "{alert}");
+        assert!(!alert["explanation"].as_str().unwrap().is_empty());
+        assert!(!alert["uncertainty"].as_str().unwrap().is_empty());
+        assert_eq!(alert["status"], "open");
+        assert!(alert["status_changed_at"].is_null());
+    }
+
+    // Restrictions.
+    let (_, high) = h.get(&format!("{base}?severity=high")).await;
+    assert!(
+        high["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|a| a["severity"] == "high")
+    );
+    let (_, beacon) = h.get(&format!("{base}?rule=FS-BEACON&sort=time")).await;
+    assert_eq!(beacon["total"], 1);
+    let beacon = &beacon["items"][0];
+    assert_eq!(beacon["destination"], "203.0.113.80");
+    assert_eq!(beacon["destination_port"], 8443);
+    for (query, code) in [
+        ("severity=critical", "invalid_severity"),
+        ("status=closed", "invalid_status"),
+        ("rule=FS-NOPE", "invalid_rule"),
+        ("sort=severity_rank", "invalid_sort"),
+        ("severity=high&extra=1", "invalid_query"),
+    ] {
+        let (status, body) = h.get(&format!("{base}?{query}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}: {body}");
+        assert_eq!(error_code(&body), code, "{query}");
+    }
+
+    // Every cited flow exists and links back to the alert.
+    let alert_id = beacon["alert_id"].as_i64().unwrap();
+    let flow_ids = beacon["related_flow_ids"].as_array().unwrap();
+    assert_eq!(flow_ids.len(), 7);
+    for flow_id in flow_ids {
+        let (status, flow) = h
+            .get(&format!("/api/v1/captures/{id}/flows/{flow_id}"))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(flow["alert_count"].as_i64().unwrap() >= 1);
+        assert!(
+            flow["record"]["alert_ids"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(alert_id))
+        );
+    }
+
+    // Detail and triage.
+    let (status, detail) = h.get(&format!("{base}/{alert_id}")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["rule_id"], "FS-BEACON");
+    let (status, body) = h.get(&format!("{base}/999")).await;
+    assert_eq!(
+        (status, error_code(&body)),
+        (StatusCode::NOT_FOUND, "not_found")
+    );
+    let (status, updated) = patch_json(
+        &h,
+        &format!("{base}/{alert_id}"),
+        r#"{"status":"false_positive"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["status"], "false_positive");
+    assert!(updated["status_changed_at"].is_string());
+    assert_eq!(updated["evidence"], detail["evidence"]);
+    let (_, triaged) = h.get(&format!("{base}?status=false_positive")).await;
+    assert_eq!(triaged["total"], 1);
+    for (body, status, code) in [
+        (
+            r#"{"status":"closed"}"#,
+            StatusCode::BAD_REQUEST,
+            "invalid_status",
+        ),
+        (
+            r#"{"status":"open","severity":"low"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_body",
+        ),
+    ] {
+        let (got, response) = patch_json(&h, &format!("{base}/{alert_id}"), body).await;
+        assert_eq!((got, error_code(&response)), (status, code), "{body}");
+    }
+    let (status, _) = patch_json(&h, &format!("{base}/999"), r#"{"status":"open"}"#).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = patch_json(
+        &h,
+        &format!("/api/v1/captures/{}/alerts/{alert_id}", id + 1),
+        r#"{"status":"open"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Flow filters over alert facts.
+    let flows = format!("/api/v1/captures/{id}/flows");
+    let (_, alerted) = h.get(&format!("{flows}?filter=alert")).await;
+    let alerted_total = alerted["total"].as_i64().unwrap();
+    assert!(alerted_total >= 7, "{alerted}");
+    assert!(
+        alerted["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["alert_count"].as_i64().unwrap() > 0)
+    );
+    let (_, quiet) = h.get(&format!("{flows}?filter=not%20alert")).await;
+    assert_eq!(
+        alerted_total + quiet["total"].as_i64().unwrap(),
+        capture["flows_stored"].as_i64().unwrap()
+    );
+    let (_, medium) = h
+        .get(&format!(
+            "{flows}?filter={}",
+            encode("alert.severity == medium")
+        ))
+        .await;
+    assert!(
+        medium["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["max_alert_severity"] == "medium")
+    );
+    // High-severity DNS alerts mark the flows of the queries they cite.
+    let (_, high) = h
+        .get(&format!(
+            "{flows}?filter={}",
+            encode("alert.severity == high")
+        ))
+        .await;
+    assert!(high["total"].as_i64().unwrap() >= 12, "{high}");
+    assert!(
+        high["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|f| f["max_alert_severity"] == "high" && f["protocol"] == 17)
+    );
+    let (status, body) = h
+        .get(&format!(
+            "{flows}?filter={}",
+            encode("alert.severity == critical")
+        ))
+        .await;
+    assert_eq!(
+        (status, error_code(&body)),
+        (StatusCode::BAD_REQUEST, "invalid_value")
+    );
+
+    // Rule catalog.
+    let (status, catalog) = h.get("/api/v1/rules").await;
+    assert_eq!(status, StatusCode::OK);
+    let catalog = catalog.as_array().unwrap();
+    assert_eq!(catalog.len(), 12);
+    for rule in catalog {
+        assert!(rule["id"].as_str().unwrap().starts_with("FS-"));
+        assert!(
+            !rule["likely_false_positives"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(rule["nature"].as_str().unwrap().contains("heuristic"));
+    }
+
+    // Alerts carry metadata only.
+    for uri in [base.clone(), format!("{base}/{alert_id}"), flows.clone()] {
+        let (_, body) = h.get(&uri).await;
+        let text = body.to_string().to_ascii_lowercase();
+        assert!(!text.contains("payload-marker"), "{uri}");
+        assert!(!text.contains("flowsentinel-secret"), "{uri}");
+    }
     h.finish().await;
 }

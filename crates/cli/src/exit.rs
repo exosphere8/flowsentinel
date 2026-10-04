@@ -4,8 +4,8 @@ use std::process::ExitCode;
 
 use capture::ErrorCategory;
 
-/// Command-line usage error. Emitted by `clap` itself.
-#[cfg(test)]
+/// Command-line usage error, emitted by `clap` itself, and an invalid
+/// `detect --config` file.
 pub const USAGE: u8 = 2;
 /// The input was rejected: wrong path, type, extension, format or size.
 pub const INPUT: u8 = 3;

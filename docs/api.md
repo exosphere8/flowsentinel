@@ -1,7 +1,8 @@
 # REST API
 
 `api-server` imports classic PCAP files and serves their **metadata** over HTTP: captures,
-packets, flows, and DNS, HTTP and TLS handshake events. No endpoint returns packet payloads, and
+packets, flows, DNS, HTTP and TLS handshake events, and the alerts raised by the detection
+rules. No endpoint returns packet payloads, and
 TLS is never decrypted. The full OpenAPI 3.1 description is served at
 `GET /api/v1/openapi.json`.
 
@@ -21,7 +22,8 @@ was killed mid-import), connects to PostgreSQL and applies the embedded, checksu
 (`crates/storage/migrations`). It then starts listening, and deletes expired captures in the
 background right away and every hour after (see [data-retention.md](data-retention.md)). It
 refuses to start if `FLOWSENTINEL_DATABASE_URL` is missing or invalid, if the database is
-unreachable, or if a setting is out of range. On Ctrl+C or SIGTERM it stops accepting
+unreachable, if a setting is out of range, or if `FLOWSENTINEL_DETECTION_CONFIG` names a
+file that cannot be read or is invalid. On Ctrl+C or SIGTERM it stops accepting
 connections and gives running requests 30 seconds to finish; requests still running then are
 cancelled and their upload files deleted.
 
@@ -37,6 +39,7 @@ cancelled and their upload files deleted.
 | `FLOWSENTINEL_MAX_PACKETS` | 1000000 | Packets analyzed per import (1–1000000); more are left out and the import is partial |
 | `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` | 600 | Processing time for an import's first pass (1–3600) |
 | `FLOWSENTINEL_ALLOWED_HOSTS` | loopback names | Comma-separated `Host` names the server answers, or `*`; see [Host names](#host-names) |
+| `FLOWSENTINEL_DETECTION_CONFIG` | built-in thresholds | TOML file of detection thresholds (see [detection-rules.md](detection-rules.md)) |
 | `RUST_LOG` | `info` | Log filter; logs are JSON lines on stdout |
 
 ## Importing a capture
@@ -109,6 +112,10 @@ All paths are under `/api/v1`. IDs are integers.
 | `GET /captures/{id}/dns` | DNS messages: transaction, query name and type, response code, answers |
 | `GET /captures/{id}/http` | HTTP request and response metadata, already redacted by the decoder |
 | `GET /captures/{id}/tls` | Visible TLS handshake metadata (SNI, ALPN, version, cipher-suite count) |
+| `GET /captures/{id}/alerts` | Alerts raised for the capture. Takes `severity`, `status` and `rule` |
+| `GET /captures/{id}/alerts/{alert_id}` | One alert with its evidence, explanation and cited flows and packets |
+| `PATCH /captures/{id}/alerts/{alert_id}` | Changes an alert's triage status; body `{"status": "acknowledged"}` |
+| `GET /rules` | The detection rule catalog |
 | `GET /filters/validate?target=packets\|flows&filter=...` | Checks a display filter; returns its normalized form |
 | `GET /filters/fields?target=packets\|flows` | Filterable fields with types, operators and allowed values |
 | `GET /settings/retention`, `PUT /settings/retention` | Retention settings (see [data-retention.md](data-retention.md)) |
@@ -135,11 +142,34 @@ return:
 | `/captures` | `newest` (default), `oldest`, `packets`, `size` |
 | `/captures/{id}/packets` | `index` (default), `-index`, `time`, `-length` |
 | `/captures/{id}/flows` | `start` (default), `-bytes`, `-packets`, `-duration` |
+| `/captures/{id}/alerts` | `severity` (default: most severe first), `time`, `id` |
 
 `/captures/{id}/packets` also takes `flow_id` to list one flow's packets. Both packet and flow
 lists take `filter`, a display filter such as `tcp.port == 443 and not ip.addr == 10.0.0.0/8`;
 see [filter-language.md](filter-language.md). Unknown query parameters are rejected with
 `invalid_query`.
+
+### Alerts
+
+Each import runs the detection rules described in [detection-rules.md](detection-rules.md) over
+the whole capture, and stores the alerts with it. The capture reports `alerts_total` and a
+`detection_summary`; each stored flow reports `alert_count` and `max_alert_severity`.
+
+**Every alert is a heuristic indicator that deserves review, not proof of compromise**, and each
+response says so in its `nature` field, next to the rule's uncertainty and likely false
+positives.
+
+```bash
+curl 'http://127.0.0.1:8080/api/v1/captures/1/alerts?severity=high'
+curl -X PATCH -H 'Content-Type: application/json' -d '{"status":"false_positive"}' \
+  'http://127.0.0.1:8080/api/v1/captures/1/alerts/4'
+```
+
+`severity` takes `low`, `medium` or `high`; `status` takes `open`, `acknowledged`, `resolved` or
+`false_positive`; `rule` takes a rule ID from `GET /rules`. Other values are rejected
+(`invalid_severity`, `invalid_status`, `invalid_rule`). Only the status of an alert can change;
+the change is logged with the capture and alert IDs and recorded in `status_changed_at`. Flows can
+be filtered by their alerts, for example `filter=alert.severity == high`.
 
 ### Times
 
@@ -205,6 +235,8 @@ the check. `GET /health` is answered for any host.
 `crates/api-server/tests/api.rs` drives every endpoint in-process against a real, disposable
 PostgreSQL database: imports, pagination, sorting, structured errors, upload validation,
 retention, `Host` checks, long and Windows-style file names, uploads far larger than the JSON
-body limit, partial imports, the OpenAPI document, and privacy. The privacy test fetches every list and detail
-endpoint for every application fixture and checks that no secret or payload marker appears.
+body limit, partial imports, display filters, alerts and their triage, the OpenAPI document, and
+privacy. The privacy test fetches every list and detail endpoint, alerts included, for every
+application fixture and the detection fixture, and checks that no secret or payload marker
+appears.
 See [CONTRIBUTING.md](../CONTRIBUTING.md#database-tests) for running them.

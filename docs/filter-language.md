@@ -151,6 +151,12 @@ value      = number | address | address/prefix | word | "quoted string"
 | `dhcp` | boolean | Carried DHCP |
 | `http` | boolean | Carried HTTP |
 | `tls` | boolean | Carried a TLS handshake |
+| `alert` | boolean | Cited by at least one alert |
+| `alert.count` | integer 0–16 | Alerts citing the flow (at most 16 are linked) |
+| `alert.severity` | keyword: `low`, `medium`, `high` | Most severe alert citing the flow |
+
+Alerts are heuristic indicators, not proof of compromise; see
+[detection-rules.md](detection-rules.md). For example, `alert.severity == high and not flow.state == established`.
 
 ## Limits and errors
 

@@ -4,6 +4,7 @@ use std::time::Duration;
 use api_server::host::HostPolicy;
 use api_server::{ApiConfig, AppState, Config, DATABASE_URL_ENV_VAR, app_with_state, upload};
 use capture::CaptureLimits;
+use detection_engine::DetectionConfig;
 use flow_engine::FlowConfig;
 use storage::Storage;
 use tokio::net::TcpListener;
@@ -66,6 +67,24 @@ async fn main() -> ExitCode {
         );
     }
 
+    let detection = match &config.detection_config {
+        None => DetectionConfig::default(),
+        Some(path) => match DetectionConfig::load(path) {
+            Ok(detection) => {
+                tracing::info!(path = %path.display(), "detection configuration loaded");
+                detection
+            }
+            Err(err) => {
+                tracing::error!(
+                    path = %path.display(),
+                    error = %err,
+                    "invalid configuration: FLOWSENTINEL_DETECTION_CONFIG"
+                );
+                return ExitCode::FAILURE;
+            }
+        },
+    };
+
     if !config.addr.ip().is_loopback() {
         tracing::warn!(
             addr = %config.addr,
@@ -103,6 +122,7 @@ async fn main() -> ExitCode {
             capture_limits,
             flow_config: FlowConfig::default(),
             host_policy,
+            detection,
         },
         config.max_concurrent_imports,
     );

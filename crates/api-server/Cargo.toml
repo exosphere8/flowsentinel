@@ -13,6 +13,7 @@ publish.workspace = true
 analysis.workspace = true
 axum.workspace = true
 capture.workspace = true
+detection-engine.workspace = true
 filter-language.workspace = true
 flow-engine.workspace = true
 futures-util.workspace = true

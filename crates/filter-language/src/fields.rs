@@ -83,6 +83,7 @@ const END_REASONS: &[&str] = &[
 /// store port 0 on both sides; port fields must not match them.
 const PORTED: Option<&str> =
     Some("protocol IN (6, 17) AND (initiator_port <> 0 OR responder_port <> 0)");
+const SEVERITIES: &[&str] = &["low", "medium", "high"];
 const U16: FieldType = FieldType::UInt { max: 65_535 };
 
 const fn field(
@@ -525,6 +526,27 @@ pub const FLOW_FIELDS: &[Field] = &[
         Predicate("'tls' = ANY(application_protocols)"),
         None,
         "carried a TLS handshake",
+    ),
+    field(
+        "alert",
+        Bool,
+        Predicate("alert_count > 0"),
+        None,
+        "cited by at least one alert",
+    ),
+    field(
+        "alert.count",
+        UInt { max: 16 },
+        One("alert_count"),
+        None,
+        "alerts citing the flow (at most 16 are linked)",
+    ),
+    field(
+        "alert.severity",
+        Enum(SEVERITIES),
+        One("max_alert_severity"),
+        None,
+        "most severe alert citing the flow: low, medium or high",
     ),
 ];
 

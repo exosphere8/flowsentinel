@@ -47,6 +47,8 @@ pub const MAX_PACKETS_ENV_VAR: &str = "FLOWSENTINEL_MAX_PACKETS";
 pub const MAX_ANALYSIS_SECONDS_ENV_VAR: &str = "FLOWSENTINEL_MAX_ANALYSIS_SECONDS";
 /// Time limit for one filtered list query, in seconds.
 pub const QUERY_TIMEOUT_ENV_VAR: &str = "FLOWSENTINEL_QUERY_TIMEOUT_SECONDS";
+/// Optional TOML file with detection thresholds.
+pub const DETECTION_CONFIG_ENV_VAR: &str = "FLOWSENTINEL_DETECTION_CONFIG";
 
 /// Default listen address: loopback only, so a fresh install is not reachable
 /// from the network.
@@ -110,6 +112,12 @@ pub fn app_with_state(state: AppState) -> Router {
             "/settings/retention",
             get(routes::get_retention).put(routes::put_retention),
         )
+        .route("/captures/{id}/alerts", get(routes::list_alerts))
+        .route(
+            "/captures/{id}/alerts/{alert_id}",
+            get(routes::get_alert).patch(routes::update_alert),
+        )
+        .route("/rules", get(routes::list_rules))
         .route("/filters/validate", get(routes::validate_filter))
         .route("/filters/fields", get(routes::filter_fields))
         .route("/openapi.json", get(openapi_json))
@@ -146,6 +154,8 @@ pub struct Config {
     pub max_packets: u64,
     pub max_analysis_seconds: u64,
     pub query_timeout_seconds: u64,
+    /// Detection thresholds file (default: built-in thresholds).
+    pub detection_config: Option<PathBuf>,
 }
 
 impl fmt::Debug for Config {
@@ -164,6 +174,7 @@ impl fmt::Debug for Config {
             .field("max_packets", &self.max_packets)
             .field("max_analysis_seconds", &self.max_analysis_seconds)
             .field("query_timeout_seconds", &self.query_timeout_seconds)
+            .field("detection_config", &self.detection_config)
             .finish()
     }
 }
@@ -206,6 +217,7 @@ impl Default for Config {
             max_packets: DEFAULT_MAX_PACKETS,
             max_analysis_seconds: DEFAULT_MAX_ANALYSIS_SECONDS,
             query_timeout_seconds: DEFAULT_QUERY_TIMEOUT_SECONDS,
+            detection_config: None,
         }
     }
 }
@@ -309,10 +321,14 @@ impl Config {
             1,
             300,
         )?;
-        let upload_dir = lookup(UPLOAD_DIR_ENV_VAR)
-            .map(|raw| raw.trim().to_owned())
-            .filter(|raw| !raw.is_empty())
-            .map(PathBuf::from);
+        let path = |variable| {
+            lookup(variable)
+                .map(|raw| raw.trim().to_owned())
+                .filter(|raw| !raw.is_empty())
+                .map(PathBuf::from)
+        };
+        let upload_dir = path(UPLOAD_DIR_ENV_VAR);
+        let detection_config = path(DETECTION_CONFIG_ENV_VAR);
         Ok(Self {
             addr,
             database_url,
@@ -324,6 +340,7 @@ impl Config {
             max_packets,
             max_analysis_seconds,
             query_timeout_seconds,
+            detection_config,
         })
     }
 }
@@ -404,12 +421,20 @@ mod tests {
             (MAX_IMPORTS_ENV_VAR, "4"),
             (DB_CONNECTIONS_ENV_VAR, "20"),
             (UPLOAD_DIR_ENV_VAR, "/var/tmp"),
+            (
+                DETECTION_CONFIG_ENV_VAR,
+                " /etc/flowsentinel/detection.toml ",
+            ),
         ]))
         .unwrap();
         assert_eq!(ok.max_upload_bytes, 64 * 1024 * 1024);
         assert_eq!(ok.max_concurrent_imports, 4);
         assert_eq!(ok.db_max_connections, 20);
         assert_eq!(ok.upload_dir, Some(PathBuf::from("/var/tmp")));
+        assert_eq!(
+            ok.detection_config,
+            Some(PathBuf::from("/etc/flowsentinel/detection.toml"))
+        );
     }
 
     #[test]

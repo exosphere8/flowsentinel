@@ -7,17 +7,20 @@ is never stored, and how long stored data is kept.
 
 | Table | One row per | Contents |
 | --- | --- | --- |
-| `capture_sessions` | Imported file | Sanitized file name, size, SHA-256, PCAP header facts, counts, time range, completion state, capture warnings, decode summary, flow summary, `created_at`, `expires_at` |
+| `capture_sessions` | Imported file | Sanitized file name, size, SHA-256, PCAP header facts, counts, time range, completion state, capture warnings, decode summary, flow summary, alert total, detection summary, `created_at`, `expires_at` |
 | `packets` | Stored packet | Index, time, lengths, decode status, endpoints, ports, flow ID, decoded layers (JSON), decode warnings, info line |
-| `flows` | Retained flow | Endpoints, counters, statistics, TCP state, end reason, the full flow record (JSON) |
+| `flows` | Retained flow | Endpoints, counters, statistics, TCP state, end reason, alert count and highest alert severity, the full flow record (JSON) |
+| `alerts` | Detection alert (at most 1,000 per rule and capture) | Rule, severity, confidence, triage status and when it last changed, time range, endpoints, cited flow IDs and packet indexes (at most 50 each), evidence values, explanation, uncertainty, likely false positives, ATT&CK context |
 | `dns_events` | DNS packet | Transaction ID, query name and type, response code, answer summaries (addresses and names; other record data is never decoded) |
 | `http_events` | HTTP packet | Method, host, path (query string removed, tokens masked), status, content type, whether anything was redacted |
 | `tls_events` | TLS handshake packet | Handshake type, server name, ALPN, negotiated version, cipher-suite count |
 | `retention_settings` | (one row) | The settings below |
 
-Every value comes from the decoder and flow engine described in
-[protocol-decoding.md](protocol-decoding.md), [application-metadata.md](application-metadata.md)
-and [flow-engine.md](flow-engine.md). The same redaction rules apply.
+Every value comes from the decoder, flow engine and detection rules described in
+[protocol-decoding.md](protocol-decoding.md), [application-metadata.md](application-metadata.md),
+[flow-engine.md](flow-engine.md) and [detection-rules.md](detection-rules.md). The same
+redaction rules apply: alert evidence holds counts, thresholds, addresses, ports, domain names
+and MAC addresses, never payload.
 
 ## What is never stored
 
@@ -62,7 +65,7 @@ An import analyzes at most `FLOWSENTINEL_MAX_PACKETS` packets (1,000,000 by defa
   it starts and then every hour.
   Each run is logged with the number of captures deleted.
 - `DELETE /api/v1/captures/{id}` deletes a capture at once.
-- Deleting a capture removes all its packets, flows and events in the same statement (foreign keys
+- Deleting a capture removes all its packets, flows, alerts and events in the same statement (foreign keys
   with `ON DELETE CASCADE`).
 
 PostgreSQL reclaims the space of deleted rows through autovacuum. Deleted data can remain in the

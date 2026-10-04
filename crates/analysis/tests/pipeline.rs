@@ -2,8 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use analysis::{AnalysisConfig, AnalyzedPacket, analyze_file, replay_packets};
+use analysis::{
+    AnalysisConfig, AnalyzedPacket, analyze_file, analyze_file_with_detection, replay_packets,
+};
 use capture::MonotonicClock;
+use detection_engine::{DetectionConfig, Detector};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -131,4 +134,38 @@ fn invalid_captures_fail_in_the_first_pass() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn detection_runs_in_the_first_pass_and_links_flows() {
+    let path = fixture("detect-mixed.pcap");
+    let config = AnalysisConfig::default();
+    let plain = analyze_file(&path, &config, &MonotonicClock::start()).unwrap();
+    assert!(plain.detection.is_none());
+    let detector = Detector::new(DetectionConfig::default()).unwrap();
+    let analysis =
+        analyze_file_with_detection(&path, &config, detector, &MonotonicClock::start()).unwrap();
+    let detection = analysis.detection.as_ref().unwrap();
+    assert_eq!(detection.alerts.len(), 5);
+    assert_eq!(detection.summary.flows_evaluated, 47);
+    // Detection does not change what is replayed.
+    assert_eq!(analysis.fingerprint, plain.fingerprint);
+    for alert in &detection.alerts {
+        for flow_id in &alert.related_flow_ids {
+            let flow = analysis
+                .flows
+                .flows
+                .iter()
+                .find(|f| f.flow_id == *flow_id)
+                .unwrap();
+            assert!(flow.alert_ids.contains(&alert.alert_id));
+        }
+    }
+    let unlinked = analysis
+        .flows
+        .flows
+        .iter()
+        .filter(|f| f.alert_ids.is_empty())
+        .count();
+    assert!(unlinked > 0 && unlinked < analysis.flows.flows.len());
 }
