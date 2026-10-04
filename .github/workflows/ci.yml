@@ -40,6 +40,31 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+  live:
+    name: Live capture (libpcap)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install libpcap
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+      - name: Clippy with libpcap
+        run: cargo clippy --workspace --all-targets --locked --features api-server/live-capture -- -D warnings
+      - name: Test with libpcap
+        run: cargo test --workspace --locked --features api-server/live-capture
+      - name: Capture loopback traffic with CAP_NET_RAW only, as an unprivileged user
+        run: |
+          bin=$(cargo test --locked -p live-capture --features libpcap --test session --no-run \
+            --message-format=json | jq -r 'select(.executable != null and .target.name == "session") | .executable')
+          sudo setcap cap_net_raw=eip "$bin"
+          out=$(FLOWSENTINEL_LIVE_TEST_INTERFACE=lo "$bin" captures_loopback_traffic_when_permitted --exact)
+          echo "$out"
+          # Fail if the test was filtered away instead of run.
+          echo "$out" | grep -q "1 passed"
+
   msrv:
     name: Minimum supported Rust (1.85)
     runs-on: ubuntu-latest

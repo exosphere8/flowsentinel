@@ -27,19 +27,26 @@ async function signIn(page: Page, username: string, password: string) {
  * are expected here (an invalid filter is answered with 400), so they are
  * left out.
  */
+/** The server in these tests has live capture turned off: 503 by design. */
+const DISABLED_LIVE = /\/api\/v1\/live\/interfaces$/;
+
 function watchErrors(page: Page): string[] {
   const errors: string[] = [];
   page.on('console', (message) => {
     const text = message.text();
     // 4xx responses are expected: the session check before sign-in (401)
     // and an invalid filter (400).
-    if (message.type() === 'error' && !/^Failed to load resource: .* status of 4\d\d/.test(text)) {
+    const expected =
+      /^Failed to load resource: .* status of 4\d\d/.test(text) ||
+      (DISABLED_LIVE.test(message.location().url) && / status of 503/.test(text));
+    if (message.type() === 'error' && !expected) {
       errors.push(text);
     }
   });
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('response', (response) => {
-    if (response.status() >= 500) errors.push(`${response.status()} ${response.url()}`);
+    const disabledLive = response.status() === 503 && DISABLED_LIVE.test(response.url());
+    if (response.status() >= 500 && !disabledLive) errors.push(`${response.status()} ${response.url()}`);
   });
   return errors;
 }
@@ -124,6 +131,11 @@ test('import a capture and walk the dashboard', async ({ page }) => {
   await expect(page.getByRole('region', { name: 'Audit events (table)' })).toContainText('capture.import');
   await expect(page.getByRole('region', { name: 'Audit events (table)' })).toContainText('user.create');
   await expect(page.locator('body')).not.toContainText(VIEWER_PASSWORD);
+
+  // Live capture is off unless the operator enables it; the page says how.
+  await page.getByRole('link', { name: 'Live capture' }).click();
+  await expect(page.getByText(/FLOWSENTINEL_LIVE_CAPTURE=true/)).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Start capture' })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page).toHaveURL(/\/login/);

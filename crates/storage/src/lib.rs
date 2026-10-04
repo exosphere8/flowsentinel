@@ -21,7 +21,7 @@ pub use accounts::{
     AccountChange, AuditEvent, AuditFilter, AuditOutcome, Credentials, NewAuditEvent, Role,
     SessionUser, User, UserUpdate,
 };
-pub use ingest::{ImportMeta, ImportTransaction, PacketRow};
+pub use ingest::{CaptureSource, ImportMeta, ImportTransaction, PacketRow};
 pub use models::{
     AlertRow, DnsEvent, FlowDetail, FlowSummaryRow, HttpEvent, Overview, PacketDetail,
     PacketSummary, Paged, RetentionSettings, Session, SessionDetail, TlsEvent, rfc3339_from_nanos,

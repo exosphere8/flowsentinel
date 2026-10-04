@@ -28,6 +28,7 @@ change settings, manage accounts and read the audit log. The server enforces the
 | `/account` | Your account and session, and changing your password |
 | `/users` | Admins: create accounts, change roles, disable, set passwords, delete |
 | `/audit` | Admins: the audit log, filtered by action and outcome |
+| `/live` | Admins: authorized live capture: interfaces, the start form with the authorization confirmation, live counters, stop (see [live-capture.md](live-capture.md)) |
 
 Every alert page says that **alerts are heuristic indicators to review, not proof of
 compromise**. Each alert shows its rule's uncertainty and likely benign causes next to its

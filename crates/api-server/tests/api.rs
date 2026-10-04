@@ -92,6 +92,7 @@ impl Harness {
                 detection: DetectionConfig::default(),
                 dashboard_dir,
                 auth: AuthConfig::default(),
+                live: api_server::Config::default().live(),
             },
             1,
         );

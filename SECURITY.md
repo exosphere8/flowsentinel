@@ -35,7 +35,7 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 | `main` | Yes |
 | Older commits | No |
 
-## Current security posture (Milestone 9)
+## Current security posture (Milestone 10)
 
 - Every API call except sign-in and `/health` needs a signed-in session, and each account has a
   role: viewers read, analysts also import and triage, admins also delete captures, change
@@ -84,6 +84,16 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   `no-new-privileges`; only the upload volume is writable, and the port is published on
   `127.0.0.1`. Its health check uses the server binary itself, so the image contains no shell
   tools for it.
+- Live capture is passive and opt-in. It is compiled in only with the `live-capture` feature, off
+  unless `FLOWSENTINEL_LIVE_CAPTURE=true`, admin-only, and needs an explicit authorization
+  confirmation for each capture. Interfaces can be restricted with `FLOWSENTINEL_LIVE_INTERFACES`.
+  Promiscuous mode is off unless requested; filters are length- and character-checked and
+  compiled by libpcap before capturing. Every capture is bounded in time, packets, bytes and
+  snapshot length; a slow writer causes counted drops, not unbounded memory. Packets go to a
+  private temporary file that is imported as metadata and deleted. The server needs only
+  `CAP_NET_RAW` for it (tested as an unprivileged user in CI), never root. Starts, stops and
+  results are audited. Details: [docs/live-capture.md](docs/live-capture.md) and
+  [docs/permissions.md](docs/permissions.md).
 - Storage is metadata only: no table has a column that can hold payload bytes, and the redaction
   rules of the decoder apply to everything stored. Integration tests import every application
   fixture and check that no secret or payload marker reaches the database or any API response.

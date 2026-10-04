@@ -71,6 +71,16 @@ export type AlertUpdate = {
 };
 
 /**
+ * The applied limits of a capture.
+ */
+export type AppliedLiveLimits = {
+  max_bytes: number;
+  max_packets: number;
+  max_seconds: number;
+  snaplen: number;
+};
+
+/**
  * A stored audit event.
  */
 export type AuditEvent = {
@@ -218,6 +228,87 @@ export type HttpEvent = {
   status_code?: number | null;
   time?: string | null;
   ts_ns?: number | null;
+};
+
+/**
+ * A network interface.
+ */
+export type Interface = {
+  addresses: string[];
+  description?: string | null;
+  loopback: boolean;
+  name: string;
+  up: boolean;
+};
+
+/**
+ * Body of `POST /live/captures`. Limits left out take the defaults
+ * (60 s, 100,000 packets, 100 MiB, 65,535-byte snapshots) within the
+ * server's maximums.
+ */
+export type LiveStart = {
+  /**
+   * Must be `true`: you confirm that you own this network or are
+   * authorized to capture its traffic.
+   */
+  authorized: boolean;
+  /**
+   * Optional BPF capture filter, for example `tcp port 443`.
+   */
+  filter?: string;
+  /**
+   * An interface name from `GET /live/interfaces`.
+   */
+  interface: string;
+  max_bytes?: number | null;
+  max_packets?: number | null;
+  max_seconds?: number | null;
+  /**
+   * Capture traffic not addressed to this host. Off by default.
+   */
+  promiscuous?: boolean;
+  snaplen?: number | null;
+};
+
+/**
+ * The current or most recent live capture.
+ */
+export type LiveStatus = {
+  bytes_written: number;
+  /**
+   * The stored capture, once imported.
+   */
+  capture_id?: number | null;
+  /**
+   * Dropped because the file writer fell behind.
+   */
+  dropped_backpressure: number;
+  /**
+   * Dropped by the kernel or the interface, as the system reports them.
+   */
+  dropped_by_system: number;
+  elapsed_seconds: number;
+  error?: null | ErrorBody;
+  filter?: string | null;
+  interface?: string | null;
+  limits?: null | AppliedLiveLimits;
+  packets_seen: number;
+  packets_written: number;
+  promiscuous: boolean;
+  /**
+   * RFC 3339 UTC.
+   */
+  started_at?: string | null;
+  started_by?: string | null;
+  /**
+   * `idle` (none yet), `capturing`, `importing`, `finished` or `failed`.
+   */
+  state: string;
+  /**
+   * `requested`, `packet_limit_reached`, `byte_limit_reached`,
+   * `time_limit_reached` or `source_ended`.
+   */
+  stop_reason?: string | null;
 };
 
 /**

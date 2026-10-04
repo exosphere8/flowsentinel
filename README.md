@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 FlowSentinel is a defensive network packet analyzer and flow-security monitor written in Rust.
-It imports offline PCAP files (and, later, captures authorized live traffic). It decodes protocols
+It imports offline PCAP files and captures authorized live traffic. It decodes protocols
 into privacy-conscious metadata, reconstructs bidirectional flows, and raises explainable,
 heuristic alerts that a human can verify.
 
@@ -49,6 +49,11 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   the role viewer, analyst or admin; passwords are hashed with Argon2id. Sessions expire after
   inactivity and after a fixed lifetime, state changes need a CSRF token, repeated failed
   sign-ins are locked out, and a security audit log records sign-ins, refusals and every change.
+- **Milestone 10, authorized live capture:** admins can record traffic from a server interface
+  through libpcap within time, packet and size limits, with a validated BPF filter and
+  promiscuous mode off by default, and analyze it like an import. It is off unless enabled, needs
+  only the `CAP_NET_RAW` capability (never root), and drops and counts packets rather than
+  queueing them when the writer falls behind.
 
 ## Quick start
 
@@ -237,6 +242,9 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_SECURE_COOKIES` | `false` | `true` when served through HTTPS: `Secure`, `__Host-` session cookie |
 | `FLOWSENTINEL_AUDIT_RETENTION_DAYS` | 365 | Days audit events are kept |
 | `FLOWSENTINEL_ADMIN_USERNAME`, `FLOWSENTINEL_ADMIN_PASSWORD_FILE` | `admin`, not set | Creates the first admin from a password file while no account exists |
+| `FLOWSENTINEL_LIVE_CAPTURE` | `false` | Allow authorized live capture (needs a `live-capture` build; see [docs/live-capture.md](docs/live-capture.md)) |
+| `FLOWSENTINEL_LIVE_INTERFACES` | any | Interfaces live capture may use (comma-separated) |
+| `FLOWSENTINEL_LIVE_MAX_SECONDS` | 600 | Longest live capture |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -275,6 +283,7 @@ crates/
   detection-engine/  Explainable heuristic rules over flows, DNS and ARP metadata
   filter-language/  Display-filter lexer, parser, type checker and SQL translation
   flow-engine/  Bidirectional flow reconstruction with bounded memory
+  live-capture/ Authorized live capture: libpcap and replay sources, bounded capture sessions
   storage/      PostgreSQL persistence (SQLx, embedded migrations, retention)
 config/         Example configuration (detection thresholds)
 docs/           Design and user documentation
@@ -299,7 +308,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 7 | Explainable rule-based detection | Done |
 | 8 | React dashboard | Done |
 | 9 | Authentication, RBAC and auditing | Done |
-| 10 | Authorized live capture | Planned |
+| 10 | Authorized live capture | Done |
 | 11 | Observability, performance and hardening | Planned |
 | 12 | Public release (v0.1.0) | Planned |
 

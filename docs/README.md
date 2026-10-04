@@ -14,6 +14,8 @@
 | [filter-language.md](filter-language.md) | Display filters: syntax, fields, semantics, limits, errors, how they become SQL |
 | [detection-rules.md](detection-rules.md) | `flowsentinel detect` and API alerts: the rules, alert fields, thresholds, limits, measurements |
 | [authentication.md](authentication.md) | Accounts, roles, sessions, CSRF, sign-in limits and the audit log |
+| [live-capture.md](live-capture.md) | Authorized live capture: turning it on, limits, filters, backpressure, API |
+| [permissions.md](permissions.md) | Least-privilege capture permissions on Linux, Docker, macOS and Windows |
 | [dashboard.md](dashboard.md) | The web dashboard: pages, running it, security headers, privacy, accessibility, tests |
 | [data-retention.md](data-retention.md) | What is stored, what never is, retention settings and deletion |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |

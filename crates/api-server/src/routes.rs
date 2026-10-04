@@ -16,9 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{Postgres, QueryBuilder};
 use storage::{
-    AlertFilter, AlertRow, AlertSort, DnsEvent, FlowDetail, FlowSort, FlowSummaryRow, HttpEvent,
-    ImportMeta, Overview, PacketDetail, PacketRow, PacketSort, PacketSummary, Page, Paged,
-    RetentionSettings, Session, SessionDetail, SessionSort, SqlCondition, StorageError, TlsEvent,
+    AlertFilter, AlertRow, AlertSort, CaptureSource, DnsEvent, FlowDetail, FlowSort,
+    FlowSummaryRow, HttpEvent, ImportMeta, Overview, PacketDetail, PacketRow, PacketSort,
+    PacketSummary, Page, Paged, RetentionSettings, Session, SessionDetail, SessionSort,
+    SqlCondition, StorageError, TlsEvent,
 };
 use utoipa::{IntoParams, ToSchema};
 
@@ -420,7 +421,7 @@ fn capture_error(err: &CaptureError, temp_name: &str, file_name: &str) -> ApiErr
 /// The stored name of an upload: the last component of `name` (`/` and `\\`
 /// are separators on every platform), sanitized and shortened to 128
 /// characters with the `.pcap` extension kept.
-fn upload_file_name(name: &str) -> Result<String, ApiError> {
+pub(crate) fn upload_file_name(name: &str) -> Result<String, ApiError> {
     let last = name.rsplit(['/', '\\']).next().unwrap_or_default();
     if !last.to_ascii_lowercase().ends_with(".pcap") || last.len() <= ".pcap".len() {
         return Err(ApiError::bad_request(
@@ -564,13 +565,54 @@ async fn import_upload(
         state.config.max_upload_bytes,
     )
     .await?;
+    let session = store_file(
+        state,
+        received.file.path(),
+        &file_name,
+        &received.sha256,
+        CaptureSource::Upload,
+        permit,
+    )
+    .await?;
+    tracing::info!(
+        session_id = session.session.id,
+        packets = session.session.packets_processed,
+        packets_stored = session.session.packets_stored,
+        flows = session.session.flows_total,
+        alerts = session.session.alerts_total,
+        size_bytes = received.size_bytes,
+        "capture imported"
+    );
+    let location = HeaderValue::try_from(format!("/api/v1/captures/{}", session.session.id))
+        .map_err(|e| ApiError::internal("location header", &e))?;
+    let response = (
+        StatusCode::CREATED,
+        [(header::LOCATION, location)],
+        Json(&session),
+    )
+        .into_response();
+    Ok((session, response))
+}
+
+/// Analyzes the capture file at `path` in two passes and stores its
+/// metadata in one transaction. `permit` is an import slot, held until the
+/// analysis threads finish. The caller deletes the file.
+pub(crate) async fn store_file(
+    state: &AppState,
+    path: &std::path::Path,
+    file_name: &str,
+    sha256: &str,
+    source: CaptureSource,
+    permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+) -> Result<SessionDetail, ApiError> {
+    let file_name = file_name.to_owned();
     let retention = state.storage.retention().await?;
     let config = AnalysisConfig {
         limits: state.config.capture_limits,
         flows: state.config.flow_config,
         replay_packets: u64::try_from(retention.max_packets_stored).unwrap_or(0),
     };
-    let path: PathBuf = received.file.path().to_owned();
+    let path: PathBuf = path.to_owned();
     let temp_name = display_file_name(&path);
     // The configuration was validated at startup.
     let detector = Detector::new(state.config.detection.clone())
@@ -589,7 +631,8 @@ async fn import_upload(
 
     let meta = ImportMeta {
         file_name: file_name.clone(),
-        sha256: received.sha256.clone(),
+        sha256: sha256.to_owned(),
+        source,
         ttl_days: retention.session_ttl_days,
     };
     let mut import = state.storage.begin_import(&analysis, &meta).await?;
@@ -643,25 +686,7 @@ async fn import_upload(
         ));
     }
 
-    let session = import.commit(&state.storage).await?;
-    tracing::info!(
-        session_id = session.session.id,
-        packets = session.session.packets_processed,
-        packets_stored = session.session.packets_stored,
-        flows = session.session.flows_total,
-        alerts = session.session.alerts_total,
-        size_bytes = received.size_bytes,
-        "capture imported"
-    );
-    let location = HeaderValue::try_from(format!("/api/v1/captures/{}", session.session.id))
-        .map_err(|e| ApiError::internal("location header", &e))?;
-    let response = (
-        StatusCode::CREATED,
-        [(header::LOCATION, location)],
-        Json(&session),
-    )
-        .into_response();
-    Ok((session, response))
+    Ok(import.commit(&state.storage).await?)
 }
 
 /// Totals across all captures, alert counts and the newest captures.

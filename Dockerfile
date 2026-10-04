@@ -3,9 +3,10 @@
 #   docker compose --profile app up --build
 #
 # Three stages: the dashboard is built with Node, the server with Rust, and the
-# runtime image holds only the server binary, the dashboard files and CA
-# certificates, running as an unprivileged user. Live capture (later) is not
-# part of this image.
+# runtime image holds only the server binary, the dashboard files, CA
+# certificates and libpcap, running as an unprivileged user. Live capture is
+# compiled in but off (FLOWSENTINEL_LIVE_CAPTURE), and the container has no
+# capture capability unless an operator adds it (see docs/permissions.md).
 
 FROM node:22-trixie-slim AS dashboard
 WORKDIR /src/frontend
@@ -16,14 +17,17 @@ COPY docs/openapi.json /src/docs/openapi.json
 RUN npm run check:api && npm run build
 
 FROM rust:1.97-slim-trixie AS server
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpcap-dev \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p api-server
+RUN cargo build --release --locked -p api-server --features live-capture
 
 FROM debian:trixie-slim
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates libpcap0.8t64 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --user-group --home-dir /nonexistent --shell /usr/sbin/nologin flowsentinel \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/flowsentinel/uploads

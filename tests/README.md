@@ -36,6 +36,9 @@ Tests that need PostgreSQL create a disposable database per test (see
 | Location | What it covers |
 | --- | --- |
 | `crates/storage/tests/storage.rs` | Imports, pagination, sorting, bound-parameter conditions, rollback, retention and purge, alerts with flow links and triage, no secrets stored |
+| `crates/live-capture/src/*.rs` | Live-capture limits, filter text, the pcap writer, libpcap filter compilation and permission errors |
+| `crates/live-capture/tests/session.rs` | Capture sessions with replay sources: exact files, every limit, stopping, backpressure drops, writer and source failures, snapshot length; real loopback capture with `FLOWSENTINEL_LIVE_TEST_INTERFACE` |
+| `crates/api-server/tests/live.rs` | Live capture through the API with a replay source: import as metadata, temporary file deleted, one at a time, stopping, request checks, admin only, disabled and unavailable builds, interface allowlist, audit |
 | `crates/api-server/tests/auth.rs` | Sign-in, cookies and token storage, identical failure answers, lockout, CSRF and same-origin refusals, every role against every protected action, session expiry and limits, password changes, account management and the last-admin rule, first-admin creation, audit events without secrets |
 | `crates/api-server/tests/api.rs` | Every `/api/v1` endpoint in-process: imports, structured errors, upload validation (long and Windows-style names, bodies far above the JSON limit), partial imports, `Host` checks, retention, display filters against real data, alerts and triage, OpenAPI, no secrets in any response |
 

@@ -57,6 +57,9 @@ export function Layout() {
             {admin && (
               <>
                 <li>
+                  <NavLink to="/live">Live capture</NavLink>
+                </li>
+                <li>
                   <NavLink to="/users">Users</NavLink>
                 </li>
                 <li>

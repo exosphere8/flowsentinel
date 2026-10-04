@@ -14,6 +14,7 @@ pub mod error;
 pub mod extract;
 pub mod healthcheck;
 pub mod host;
+pub mod live;
 pub mod openapi;
 pub mod ratelimit;
 pub mod routes;
@@ -71,6 +72,12 @@ pub const ADMIN_USERNAME_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_USERNAME";
 /// File holding the first admin's password; used only while no account
 /// exists.
 pub const ADMIN_PASSWORD_FILE_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_PASSWORD_FILE";
+/// `true` to allow live capture (off by default).
+pub const LIVE_CAPTURE_ENV_VAR: &str = "FLOWSENTINEL_LIVE_CAPTURE";
+/// Comma-separated interfaces live capture may use (default: any).
+pub const LIVE_INTERFACES_ENV_VAR: &str = "FLOWSENTINEL_LIVE_INTERFACES";
+/// Longest live capture, in seconds.
+pub const LIVE_MAX_SECONDS_ENV_VAR: &str = "FLOWSENTINEL_LIVE_MAX_SECONDS";
 
 /// Default listen address: loopback only, so a fresh install is not reachable
 /// from the network.
@@ -86,6 +93,7 @@ pub const DEFAULT_SESSION_IDLE_MINUTES: u64 = 30;
 pub const DEFAULT_SESSION_MAX_HOURS: u64 = 12;
 pub const DEFAULT_AUDIT_RETENTION_DAYS: u64 = 365;
 pub const DEFAULT_ADMIN_USERNAME: &str = "admin";
+pub const DEFAULT_LIVE_MAX_SECONDS: u64 = 600;
 
 /// Largest JSON request body (only the retention settings take one).
 const MAX_JSON_BODY_BYTES: usize = 16 * 1024;
@@ -140,6 +148,10 @@ pub fn app_with_state(state: AppState) -> Router {
             patch(accounts::update_user).delete(accounts::delete_user),
         )
         .route("/audit", get(accounts::list_audit))
+        .route("/live/interfaces", get(live::interfaces))
+        .route("/live/captures", post(live::start))
+        .route("/live/captures/current", get(live::status))
+        .route("/live/captures/current/stop", post(live::stop))
         .route("/overview", get(routes::overview))
         .route(
             "/captures",
@@ -226,6 +238,26 @@ pub struct Config {
     pub admin_username: String,
     /// Password file for the first admin account.
     pub admin_password_file: Option<PathBuf>,
+    pub live_capture: bool,
+    pub live_interfaces: Option<Vec<String>>,
+    pub live_max_seconds: u64,
+}
+
+impl Config {
+    /// The live-capture settings: the largest limits are the import limits
+    /// (packets, upload size) and `FLOWSENTINEL_LIVE_MAX_SECONDS`.
+    pub fn live(&self) -> live::LiveConfig {
+        live::LiveConfig {
+            enabled: self.live_capture,
+            interfaces: self.live_interfaces.clone(),
+            max: live_capture::LiveLimits {
+                max_packets: self.max_packets,
+                max_bytes: self.max_upload_bytes,
+                max_duration: std::time::Duration::from_secs(self.live_max_seconds),
+                snaplen: *live_capture::limits::SNAPLEN_RANGE.end(),
+            },
+        }
+    }
 }
 
 impl fmt::Debug for Config {
@@ -249,6 +281,9 @@ impl fmt::Debug for Config {
             .field("auth", &self.auth)
             .field("admin_username", &self.admin_username)
             .field("admin_password_file", &self.admin_password_file)
+            .field("live_capture", &self.live_capture)
+            .field("live_interfaces", &self.live_interfaces)
+            .field("live_max_seconds", &self.live_max_seconds)
             .finish()
     }
 }
@@ -276,6 +311,10 @@ pub enum ConfigError {
         "invalid FLOWSENTINEL_ALLOWED_HOSTS value {value:?}: expected comma-separated host names or addresses, or *"
     )]
     InvalidAllowedHosts { value: String },
+    #[error(
+        "invalid FLOWSENTINEL_LIVE_INTERFACES value {value:?}: expected comma-separated interface names"
+    )]
+    InvalidInterfaces { value: String },
     #[error("invalid {variable} value {value:?}: expected true or false")]
     InvalidBool {
         variable: &'static str,
@@ -301,7 +340,27 @@ impl Default for Config {
             auth: auth::AuthConfig::default(),
             admin_username: DEFAULT_ADMIN_USERNAME.to_owned(),
             admin_password_file: None,
+            live_capture: false,
+            live_interfaces: None,
+            live_max_seconds: DEFAULT_LIVE_MAX_SECONDS,
         }
+    }
+}
+
+fn boolean(
+    lookup: &impl Fn(&str) -> Option<String>,
+    variable: &'static str,
+) -> Result<bool, ConfigError> {
+    match lookup(variable) {
+        Some(raw) if !raw.trim().is_empty() => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "1" | "yes" => Ok(true),
+            "false" | "0" | "no" => Ok(false),
+            _ => Err(ConfigError::InvalidBool {
+                variable,
+                value: raw,
+            }),
+        },
+        _ => Ok(false),
     }
 }
 
@@ -434,18 +493,33 @@ impl Config {
             1,
             3_650,
         )?;
-        let secure_cookies = match lookup(SECURE_COOKIES_ENV_VAR) {
-            Some(raw) if !raw.trim().is_empty() => match raw.trim().to_ascii_lowercase().as_str() {
-                "true" | "1" | "yes" => true,
-                "false" | "0" | "no" => false,
-                _ => {
-                    return Err(ConfigError::InvalidBool {
-                        variable: SECURE_COOKIES_ENV_VAR,
-                        value: raw,
-                    });
+        let secure_cookies = boolean(&lookup, SECURE_COOKIES_ENV_VAR)?;
+        let live_capture = boolean(&lookup, LIVE_CAPTURE_ENV_VAR)?;
+        let live_max_seconds = number(
+            &lookup,
+            LIVE_MAX_SECONDS_ENV_VAR,
+            DEFAULT_LIVE_MAX_SECONDS,
+            1,
+            3_600,
+        )?;
+        let live_interfaces = match lookup(LIVE_INTERFACES_ENV_VAR) {
+            Some(raw) if !raw.trim().is_empty() => {
+                let names: Vec<String> = raw
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_owned)
+                    .collect();
+                let valid = !names.is_empty()
+                    && names
+                        .iter()
+                        .all(|n| n.len() <= 256 && !n.chars().any(char::is_control));
+                if !valid {
+                    return Err(ConfigError::InvalidInterfaces { value: raw });
                 }
-            },
-            _ => false,
+                Some(names)
+            }
+            _ => None,
         };
         let admin_username = lookup(ADMIN_USERNAME_ENV_VAR)
             .map(|raw| raw.trim().to_owned())
@@ -474,6 +548,9 @@ impl Config {
             },
             admin_username,
             admin_password_file,
+            live_capture,
+            live_interfaces,
+            live_max_seconds,
         })
     }
 }
@@ -550,6 +627,9 @@ mod tests {
             (SESSION_MAX_ENV_VAR, "721"),
             (AUDIT_RETENTION_ENV_VAR, "0"),
             (SECURE_COOKIES_ENV_VAR, "maybe"),
+            (LIVE_CAPTURE_ENV_VAR, "on"),
+            (LIVE_MAX_SECONDS_ENV_VAR, "3601"),
+            (LIVE_INTERFACES_ENV_VAR, " , "),
         ] {
             let err = Config::from_lookup(lookup_with(&[(variable, bad)])).unwrap_err();
             assert!(err.to_string().contains(variable), "{err}");
@@ -598,6 +678,22 @@ mod tests {
             Some(PathBuf::from("/run/secrets/admin"))
         );
         let defaults = Config::default();
+        assert!(!defaults.live_capture);
+        assert_eq!(defaults.live().max.max_duration.as_secs(), 600);
+        let live = Config::from_lookup(lookup_with(&[
+            (LIVE_CAPTURE_ENV_VAR, "true"),
+            (LIVE_INTERFACES_ENV_VAR, "eth0, lo"),
+            (LIVE_MAX_SECONDS_ENV_VAR, "120"),
+        ]))
+        .unwrap();
+        let settings = live.live();
+        assert!(settings.enabled);
+        assert_eq!(
+            settings.interfaces,
+            Some(vec!["eth0".to_owned(), "lo".to_owned()])
+        );
+        assert_eq!(settings.max.max_duration.as_secs(), 120);
+        assert_eq!(settings.max.max_packets, DEFAULT_MAX_PACKETS);
         assert!(!defaults.auth.secure_cookies);
         assert_eq!(defaults.auth.session_idle.as_secs(), 1800);
         assert_eq!(defaults.admin_username, "admin");

@@ -15,6 +15,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::auth::{AuthConfig, MAX_CONCURRENT_HASHES};
 use crate::error::ApiError;
 use crate::host::HostPolicy;
+use crate::live::{LiveConfig, LiveManager};
 use crate::ratelimit::LoginLimiter;
 
 /// Longest wait for a database slot before a request is refused.
@@ -38,6 +39,8 @@ pub struct ApiConfig {
     pub dashboard_dir: Option<PathBuf>,
     /// Sign-in session settings.
     pub auth: AuthConfig,
+    /// Live capture settings.
+    pub live: LiveConfig,
 }
 
 /// State shared by all handlers.
@@ -58,6 +61,8 @@ pub struct AppState {
     pub hash_slots: Arc<Semaphore>,
     /// Failed sign-in attempts per account name and client address.
     pub login_limiter: Arc<LoginLimiter>,
+    /// The live capture slot and packet sources.
+    pub live: Arc<LiveManager>,
 }
 
 impl AppState {
@@ -73,7 +78,15 @@ impl AppState {
             filter_slots: Arc::new(Semaphore::new((reads / 2).max(1))),
             hash_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
             login_limiter: Arc::new(LoginLimiter::new()),
+            live: Arc::new(LiveManager::new(Arc::from(live_capture::default_factory()))),
         }
+    }
+
+    /// Uses `factory` for live capture instead of this build's default
+    /// (tests use replay sources).
+    pub fn with_live_factory(mut self, factory: Arc<dyn live_capture::SourceFactory>) -> Self {
+        self.live = Arc::new(LiveManager::new(factory));
+        self
     }
 
     /// Waits up to 10 s for a database slot for a non-import request.
