@@ -310,6 +310,14 @@ fn host_values_must_be_host_and_port() {
         ("a.example:", None),
         ("bad host", None),
         ("a@b.example", None),
+        ("[::1]", Some("[::1]")),
+        ("[1:2:3]", None),
+        ("[::ffff:192.0.2.1]:80", Some("[::ffff:192.0.2.1]:80")),
+        // Long bracketed text is not an address.
+        (
+            "[1111:2222:3333:4444:5555:6666:7777:8888:9999:aaaa:bbbb]",
+            None,
+        ),
     ] {
         let request = format!("GET / HTTP/1.1\r\nHost: {host}\r\n\r\n");
         let packet = decode(&tcp_packet(40000, 80, request.as_bytes()));

@@ -15,13 +15,13 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 3)
+## Current components (Milestone 4)
 
 ```
                 +--------------------+
   curl -------> | api-server (Axum)  |  GET /health -> {"status":"ok","service":"flowsentinel-api"}
                 +--------------------+
-  shell ------> | cli (flowsentinel) |  --version, --help, inspect --pcap [--decode [--verbose]]
+  shell ------> | cli (flowsentinel) |  --version, --help, inspect --pcap [--decode [--verbose]], flows --pcap
                 +----+-----------+---+
                      |           |
                 +----v-------+   |  PacketSink: borrowed bytes, one packet at a time
@@ -29,7 +29,11 @@ will live. It is updated at the end of every milestone.
                 +------------+   |                  |
                      CaptureReport            +-----v------+
                                               |  decoder   |  bytes -> DecodedPacket (layers incl. DNS/DHCP/HTTP/TLS, status, warnings)
-                                              +------------+
+                                              +-----+------+
+                                                    |  &DecodedPacket + record metadata
+                                              +-----v-------+
+                                              | flow-engine |  -> FlowRecord (bidirectional stats, TCP state, app metadata)
+                                              +-------------+
 
   docker compose: PostgreSQL 16, Redis 7 (started and health-checked; not yet used by code)
 ```
@@ -102,6 +106,32 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 - The crate does not depend on `capture`; it takes a raw link-type number so live capture
   (Milestone 10) can reuse it.
 
+### `crates/flow-engine`
+
+Groups decoded packets into bidirectional flows. See [docs/flow-engine.md](docs/flow-engine.md).
+
+- `FlowKey` holds the IP protocol and the two endpoints in canonical (sorted) order, so both
+  directions match one flow. The initiator is decided separately: from the TCP handshake when one
+  is seen (`tcp_syn`, `tcp_syn_ack`), otherwise from the first packet. Sort order never decides it.
+- `FlowEngine::process` takes a `FlowPacket` (index, timestamp, wire length, borrowed
+  `DecodedPacket`) and returns the flow ID it was assigned to. It reads only decoded metadata,
+  never packet bytes.
+- Each active flow keeps constant-size state: per-direction counters, Welford mean/variance for
+  sizes and gaps, the first 256 sizes for the median, flag unions, an approximate TCP state and
+  application lists capped at 4 entries each.
+- Flows are timed by the engine's clock, which follows packet timestamps but accepts a jump of
+  more than a day only when the next packet confirms it, so one corrupt timestamp cannot expire
+  or freeze flows. Flows end on idle timeout (per protocol), shortly after TCP closes or when a
+  new SYN reuses closed ports, by least-recently-seen eviction when `max_active_flows` is
+  reached, when the clock is confirmed to have jumped back by more than a day, or at the end of
+  the capture.
+  Ordered indexes `(deadline, id)` and `(packet sequence, id)` make expiry and eviction
+  logarithmic and deterministic.
+- `finish` returns the `FlowRecord`s with the lowest IDs (at most `max_retained_flows`) in
+  `flow_id` order (kept in a max-heap by ID while running), and a `FlowSummary` with totals,
+  end-reason counts, ignored timestamp outliers and confirmed clock jumps.
+- Depends on `capture` (timestamps) and `decoder` (layers) only.
+
 ### `crates/cli`
 
 - A `clap` derive parser producing the `flowsentinel` binary. A bare invocation prints help.
@@ -112,6 +142,9 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
   only the running `DecodeSummary` and the widest endpoint text. Pass 2 decodes the same packets
   again and writes each row, tree or JSON element as soon as it is decoded, so the summaries can
   be printed first without keeping any packet.
+- `flows` decodes each packet in one pass, feeds it to a `FlowEngine` and prints the finished
+  flows as a table or one JSON object. `inspect` and `flows` share the capture flags through a
+  flattened `CaptureArgs`.
 
 ### Infrastructure
 
@@ -125,7 +158,6 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `flow-engine` | 4 | Bidirectional flow tracking with bounded memory and idle expiry |
 | `storage` | 5 | SQLx/PostgreSQL persistence with migrations and retention |
 | `filter-language` | 6 | Display-filter lexer, parser, validator and parameterized SQL translation |
 | `detection-engine` | 7 | Configurable, explainable heuristics over flows and metadata |

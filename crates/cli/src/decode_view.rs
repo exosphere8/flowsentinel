@@ -189,7 +189,7 @@ pub fn stream_packets(
         fingerprint: Fingerprint::default(),
     };
     let second = inspect_file_with_sink(
-        &args.pcap,
+        &args.capture.pcap,
         &limits,
         &MonotonicClock::start(),
         Some(&mut streamer),
@@ -392,7 +392,7 @@ mod tests {
     fn first_pass(args: &InspectArgs) -> (CaptureReport, SummaryCollector) {
         let mut collector = SummaryCollector::default();
         let report = inspect_file_with_sink(
-            &args.pcap,
+            &args.capture.pcap,
             &args.limits(),
             &MonotonicClock::start(),
             Some(&mut collector),

@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/api-server", "crates/capture", "crates/cli", "crates/decoder"]
+members = [
+    "crates/api-server",
+    "crates/capture",
+    "crates/cli",
+    "crates/decoder",
+    "crates/flow-engine",
+]
 # Built separately with a nightly toolchain; see fuzz/README.md.
 exclude = ["fuzz"]
 
@@ -17,12 +23,13 @@ publish = false
 # Workspace crates
 capture = { path = "crates/capture" }
 decoder = { path = "crates/decoder" }
+flow-engine = { path = "crates/flow-engine" }
 
 # Third-party crates
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
 libc = "0.2.190"
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }

@@ -2,13 +2,16 @@
 
 mod decode_view;
 mod exit;
+mod flows;
 mod inspect;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use capture::CaptureLimits;
-use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use flow_engine::FlowConfig;
 
 /// Defensive, metadata-first network packet and flow analyzer.
 ///
@@ -33,10 +36,22 @@ enum Command {
     /// Exit codes: 0 success (including partial results at a limit),
     /// 2 usage error, 3 rejected input, 4 malformed capture, 5 I/O error.
     Inspect(InspectArgs),
+
+    /// Reconstruct bidirectional flows from an offline classic PCAP file.
+    ///
+    /// Decodes every packet, groups both directions of each conversation
+    /// into one flow and prints per-flow statistics and application
+    /// metadata. Packet contents are never printed. Memory is bounded by
+    /// --max-active-flows and --max-flows.
+    ///
+    /// Exit codes: 0 success (including partial results at a limit),
+    /// 2 usage error, 3 rejected input, 4 malformed capture, 5 I/O error.
+    Flows(FlowsArgs),
 }
 
+/// Input file and processing limits shared by every command.
 #[derive(Debug, Args)]
-struct InspectArgs {
+struct CaptureArgs {
     /// Classic libpcap (.pcap) file you are authorized to analyze.
     #[arg(long, value_name = "PATH")]
     pcap: PathBuf,
@@ -68,6 +83,22 @@ struct InspectArgs {
         value_parser = clap::value_parser!(u64).range(CaptureLimits::MAX_DURATION_SECONDS_RANGE),
     )]
     max_duration_seconds: u64,
+}
+
+impl CaptureArgs {
+    fn limits(&self) -> CaptureLimits {
+        CaptureLimits::from_cli_units(
+            self.max_file_size_mb,
+            self.max_packets,
+            self.max_duration_seconds,
+        )
+    }
+}
+
+#[derive(Debug, Args)]
+struct InspectArgs {
+    #[command(flatten)]
+    capture: CaptureArgs,
 
     /// Decode protocol headers (Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP,
     /// UDP) and application metadata (DNS, DHCP, HTTP/1.x, TLS handshakes).
@@ -80,19 +111,95 @@ struct InspectArgs {
     #[arg(long, requires = "decode")]
     verbose: bool,
 
-    /// Print one JSON object on stdout instead of tables. Errors are also
-    /// printed as JSON on stdout.
+    /// Print one JSON object on stdout instead of tables. Capture errors are
+    /// also printed as JSON on stdout; invalid options are reported as text
+    /// on stderr.
     #[arg(long)]
     json: bool,
 }
 
 impl InspectArgs {
     fn limits(&self) -> CaptureLimits {
-        CaptureLimits::from_cli_units(
-            self.max_file_size_mb,
-            self.max_packets,
-            self.max_duration_seconds,
-        )
+        self.capture.limits()
+    }
+}
+
+/// Order of the flow list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum FlowSort {
+    /// By first packet (flow ID).
+    Start,
+    /// Most bytes first.
+    Bytes,
+    /// Most packets first.
+    Packets,
+    /// Longest first.
+    Duration,
+}
+
+#[derive(Debug, Args)]
+struct FlowsArgs {
+    #[command(flatten)]
+    capture: CaptureArgs,
+
+    /// Most flows tracked at once (1-1000000). When the table is full the
+    /// least recently seen flow is ended early ("evicted").
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = FlowConfig::DEFAULT_MAX_ACTIVE_FLOWS as u64,
+        value_parser = clap::value_parser!(u64).range(1..=1_000_000),
+    )]
+    max_active_flows: u64,
+
+    /// Most finished flows listed (1-1000000); further flows are counted
+    /// but not listed.
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = FlowConfig::DEFAULT_MAX_RETAINED_FLOWS as u64,
+        value_parser = clap::value_parser!(u64).range(1..=1_000_000),
+    )]
+    max_flows: u64,
+
+    /// Idle timeout for open TCP flows, in seconds (1-86400).
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = FlowConfig::DEFAULT_TCP_IDLE_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..=86_400),
+    )]
+    tcp_idle_timeout_seconds: u64,
+
+    /// Idle timeout for UDP, ICMP and other flows, in seconds (1-86400).
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = FlowConfig::DEFAULT_IDLE_SECONDS,
+        value_parser = clap::value_parser!(u64).range(1..=86_400),
+    )]
+    idle_timeout_seconds: u64,
+
+    /// Order of the flow list.
+    #[arg(long, value_enum, default_value_t = FlowSort::Start)]
+    sort: FlowSort,
+
+    /// Print one JSON object on stdout instead of tables. Capture errors are
+    /// also printed as JSON on stdout; invalid options are reported as text
+    /// on stderr.
+    #[arg(long)]
+    json: bool,
+}
+
+impl FlowsArgs {
+    fn flow_config(&self) -> FlowConfig {
+        FlowConfig {
+            max_active_flows: usize::try_from(self.max_active_flows).unwrap_or(usize::MAX),
+            max_retained_flows: usize::try_from(self.max_flows).unwrap_or(usize::MAX),
+            tcp_idle_timeout: Duration::from_secs(self.tcp_idle_timeout_seconds),
+            idle_timeout: Duration::from_secs(self.idle_timeout_seconds),
+            ..FlowConfig::default()
+        }
     }
 }
 
@@ -100,6 +207,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Inspect(args)) => inspect::run(&args),
+        Some(Command::Flows(args)) => flows::run(&args),
         None => match Cli::command().print_help() {
             Ok(()) => ExitCode::SUCCESS,
             Err(err) => {
@@ -143,7 +251,7 @@ mod tests {
         argv.extend_from_slice(extra);
         match Cli::try_parse_from(argv)?.command {
             Some(Command::Inspect(args)) => Ok(args),
-            None => panic!("expected inspect"),
+            _ => panic!("expected inspect"),
         }
     }
 
