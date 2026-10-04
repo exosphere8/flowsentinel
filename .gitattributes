@@ -1,3 +1,4 @@
 * text=auto eol=lf
-*.pcap binary
-*.pcapng binary
+*.[pP][cC][aA][pP] binary
+*.[pP][cC][aA][pP][nN][gG] binary
+fixtures/pcap/** binary

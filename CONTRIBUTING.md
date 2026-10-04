@@ -41,6 +41,9 @@ cargo build --workspace
   an untrusted size.
 - Never log, print or store packet payloads, credentials or secrets.
 - Add tests for every feature and every error path. Prefer deterministic tests with no network access.
+- Binary fixtures come from scripts. To add a PCAP fixture, extend
+  `scripts/generate_pcap_fixtures.py`, run `make fixtures`, and commit both the script and the
+  output. CI fails if the committed fixtures differ from the script's output.
 - Keep documentation in sync: user-visible changes update the README or `docs/`.
 
 ## Branches and commits

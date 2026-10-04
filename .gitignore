@@ -8,12 +8,13 @@ target/
 !.env.example
 
 # Packet captures: may contain sensitive traffic. Synthetic fixtures under
-# fixtures/ are explicitly re-included below.
-*.pcap
-*.pcapng
-*.cap
-!fixtures/**/*.pcap
-!fixtures/**/*.pcapng
+# fixtures/ are explicitly re-included below. Patterns are case-insensitive
+# because FlowSentinel accepts .PCAP as well as .pcap.
+*.[pP][cC][aA][pP]
+*.[pP][cC][aA][pP][nN][gG]
+*.[cC][aA][pP]
+!fixtures/**/*.[pP][cC][aA][pP]
+!fixtures/**/*.[pP][cC][aA][pP][nN][gG]
 
 # Logs
 *.log

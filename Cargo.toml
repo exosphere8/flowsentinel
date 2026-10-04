@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/api-server", "crates/cli"]
+members = ["crates/api-server", "crates/capture", "crates/cli"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,14 +12,24 @@ repository = "https://github.com/exosphere8/flowsentinel"
 publish = false
 
 [workspace.dependencies]
+# Workspace crates
+capture = { path = "crates/capture" }
+
+# Third-party crates
 axum = "0.8.9"
 clap = { version = "4.6.7", features = ["derive"] }
+libc = "0.2.190"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 thiserror = "2.0.21"
 tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread", "net", "signal"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# Test-only dependencies
+proptest = "1.11.0"
+tempfile = "3.27.0"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
