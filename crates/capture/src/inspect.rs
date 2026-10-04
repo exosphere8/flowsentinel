@@ -73,6 +73,21 @@ pub struct CaptureReport {
     pub warnings: Vec<CaptureWarning>,
 }
 
+/// Receives each packet's captured bytes during an inspection, for transient
+/// processing such as protocol decoding.
+///
+/// `data` is borrowed for the duration of one call and holds at most
+/// [`MAX_PACKET_DATA_BYTES`](crate::MAX_PACKET_DATA_BYTES) bytes.
+/// Implementations should extract metadata and must not keep copies of the
+/// bytes.
+pub trait PacketSink {
+    /// Called once after the global header is validated, before any packet.
+    fn start(&mut self, _header: &PcapGlobalHeader) {}
+
+    /// Called for each complete record, in file order.
+    fn packet(&mut self, record: &PacketRecordMetadata, data: &[u8]);
+}
+
 /// Validates `path` and inspects it with a wall-clock time limit.
 pub fn inspect_file(path: &Path, limits: &CaptureLimits) -> Result<CaptureReport, CaptureError> {
     inspect_file_with_clock(path, limits, &MonotonicClock::start())
@@ -84,12 +99,30 @@ pub fn inspect_file_with_clock(
     limits: &CaptureLimits,
     clock: &dyn Clock,
 ) -> Result<CaptureReport, CaptureError> {
+    inspect_file_with_sink(path, limits, clock, None)
+}
+
+/// Like [`inspect_file_with_clock`], additionally passing every packet's
+/// bytes to `sink`.
+pub fn inspect_file_with_sink(
+    path: &Path,
+    limits: &CaptureLimits,
+    clock: &dyn Clock,
+    sink: Option<&mut dyn PacketSink>,
+) -> Result<CaptureReport, CaptureError> {
     let limits = limits.clamped();
     let (file, file_name, file_size_bytes) = open_capture(path, &limits)?;
     // Read exactly the bytes whose size was validated, even if the file grows
     // while it is being read.
     let mut source = BufReader::with_capacity(READ_BUFFER_BYTES, file.take(file_size_bytes));
-    let mut report = inspect_reader(&mut source, file_name, file_size_bytes, &limits, clock)?;
+    let mut report = inspect_reader_with_sink(
+        &mut source,
+        file_name,
+        file_size_bytes,
+        &limits,
+        clock,
+        sink,
+    )?;
 
     let size_now = source.get_ref().get_ref().metadata().map(|m| m.len());
     if size_now.is_ok_and(|len| len != file_size_bytes) {
@@ -189,8 +222,26 @@ pub fn inspect_reader<R: BufRead>(
     limits: &CaptureLimits,
     clock: &dyn Clock,
 ) -> Result<CaptureReport, CaptureError> {
+    inspect_reader_with_sink(source, file_name, file_size_bytes, limits, clock, None)
+}
+
+/// Like [`inspect_reader`], additionally passing every packet's bytes to
+/// `sink`. Without a sink, packet data is skipped rather than copied.
+pub fn inspect_reader_with_sink<R: BufRead>(
+    source: R,
+    file_name: String,
+    file_size_bytes: u64,
+    limits: &CaptureLimits,
+    clock: &dyn Clock,
+    mut sink: Option<&mut dyn PacketSink>,
+) -> Result<CaptureReport, CaptureError> {
     let limits = &limits.clamped();
     let mut reader = PcapReader::new(source)?;
+    if let Some(sink) = sink.as_deref_mut() {
+        sink.start(reader.header());
+    }
+    // Reused for every record; grows at most to MAX_PACKET_DATA_BYTES.
+    let mut data = Vec::new();
     let mut packets = Vec::new();
     let mut captured_bytes_total: u64 = 0;
     let mut original_bytes_total: u64 = 0;
@@ -207,7 +258,13 @@ pub fn inspect_reader<R: BufRead>(
         if clock.elapsed() >= limits.max_duration {
             break CompletionState::TimeLimitReached;
         }
-        let Some(record) = reader.next_record()? else {
+        let next = match sink.as_deref_mut() {
+            Some(sink) => reader.next_packet(&mut data)?.inspect(|record| {
+                sink.packet(record, &data);
+            }),
+            None => reader.next_record()?,
+        };
+        let Some(record) = next else {
             break CompletionState::Complete;
         };
         captured_bytes_total =
@@ -492,6 +549,47 @@ mod tests {
             }
             Duration::ZERO
         }
+    }
+
+    #[derive(Default)]
+    struct RecordingSink {
+        link_type: Option<u16>,
+        seen: Vec<(u64, usize, bool)>,
+    }
+
+    impl PacketSink for RecordingSink {
+        fn start(&mut self, header: &PcapGlobalHeader) {
+            self.link_type = Some(header.link_type.0);
+        }
+
+        fn packet(&mut self, record: &PacketRecordMetadata, data: &[u8]) {
+            self.seen
+                .push((record.index, data.len(), data == b"PAYLOAD!"));
+        }
+    }
+
+    #[test]
+    fn sinks_see_every_packet_and_the_report_is_unchanged() {
+        let limits = CaptureLimits {
+            max_packets: 2,
+            ..CaptureLimits::default()
+        };
+        let mut sink = RecordingSink::default();
+        let bytes = capture(3);
+        let len = bytes.len() as u64;
+        let with_sink = inspect_reader_with_sink(
+            Cursor::new(bytes.clone()),
+            "t.pcap".into(),
+            len,
+            &limits,
+            &frozen(),
+            Some(&mut sink),
+        )
+        .unwrap();
+        let without = inspect(bytes, &limits, &frozen());
+        assert_eq!(with_sink, without);
+        assert_eq!(sink.link_type, Some(1));
+        assert_eq!(sink.seen, vec![(1, 8, true), (2, 8, true)]);
     }
 
     #[test]

@@ -15,18 +15,21 @@ will live. It is updated at the end of every milestone.
 5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
    will be isolated so the rest of the system never runs elevated.
 
-## Current components (Milestone 1)
+## Current components (Milestone 2)
 
 ```
                 +--------------------+
   curl -------> | api-server (Axum)  |  GET /health -> {"status":"ok","service":"flowsentinel-api"}
                 +--------------------+
-  shell ------> | cli (flowsentinel) |  --version, --help, inspect --pcap
-                +---------+----------+
-                          |
-                +---------v----------+
-  .pcap file -> |      capture       |  global header + record headers -> CaptureReport
-                +--------------------+
+  shell ------> | cli (flowsentinel) |  --version, --help, inspect --pcap [--decode [--verbose]]
+                +----+-----------+---+
+                     |           |
+                +----v-------+   |  PacketSink: borrowed bytes, one packet at a time
+  .pcap file -> |  capture   +---+------------------+
+                +------------+   |                  |
+                     CaptureReport            +-----v------+
+                                              |  decoder   |  bytes -> DecodedPacket (layers, status, warnings)
+                                              +------------+
 
   docker compose: PostgreSQL 16, Redis 7 (started and health-checked; not yet used by code)
 ```
@@ -63,12 +66,39 @@ Reads the classic libpcap container and nothing inside it. See
   state and deduplicated warnings.
 - Errors carry a stable `code()` and a `category()` (input, malformed, io) that front ends map to
   exit codes or HTTP statuses. No public type can hold packet bytes.
+- Packet bytes leave the crate only transiently. `PcapReader::next_packet` copies a record's
+  bytes (at most 262,144) into a caller-owned buffer that is overwritten by the next call, and
+  `inspect_*_with_sink` uses it to lend each record's bytes to a `PacketSink` for the duration
+  of one call. Without a sink, data is skipped instead of copied.
+
+### `crates/decoder`
+
+Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/protocol-decoding.md).
+
+- `decode_packet(link_type, bytes, wire_length)` returns a `DecodedPacket`: a `Vec<Layer>` protocol tree
+  (Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP, UDP), a `DecodeStatus` (complete, unsupported,
+  truncated, malformed) and per-packet warnings. It never fails and never panics.
+- Parsers live in `link.rs` (Ethernet, VLAN, ARP), `network.rs` (IPv4, IPv6 extension-header
+  walk) and `transport.rs` (TCP, UDP, ICMP). All field access goes through `bytes.rs`, whose
+  accessors return `Option` instead of indexing.
+- A per-packet `Context` collects layers and warnings and records the first stop reason.
+  The context also knows whether the frame was cut by the snapshot length, which separates
+  `truncated` (snapped) from `length_mismatch` (a header declaring bytes that a complete frame
+  lacks). Network layers pass transport parsers an `Encapsulation` (declared payload length,
+  fragment flag, capture cut) so length checks use the IP-declared size, not the captured size.
+- `DecodeSummary` aggregates statuses, protocols and warnings over a capture in memory bounded by
+  the number of enum values.
+- `describe.rs` renders one-line summaries (`info`, `endpoints`, `Layer::describe`) for front ends.
+- The crate does not depend on `capture`; it takes a raw link-type number so live capture
+  (Milestone 10) can reuse it.
 
 ### `crates/cli`
 
 - A `clap` derive parser producing the `flowsentinel` binary. A bare invocation prints help.
 - `inspect` renders a `CaptureReport` as tables or one JSON object. Exit codes: 0 success
   (including partial results), 2 usage, 3 rejected input, 4 malformed capture, 5 I/O.
+- With `--decode`, `decode_view::DecodeCollector` is passed to `capture` as a `PacketSink`. It
+  decodes each packet as it is read and keeps only the `DecodedPacket`.
 
 ### Infrastructure
 
@@ -82,7 +112,7 @@ Reads the classic libpcap container and nothing inside it. See
 | Crate (planned) | Milestone | Responsibility |
 | --- | --- | --- |
 | `capture` | 10 | Live capture via libpcap (offline reading is done) |
-| `decoder` | 2, 3 | Bounds-checked protocol decoding into typed metadata |
+| `decoder` | 3 | Application metadata (DNS, DHCP, HTTP, TLS handshake); core protocols are done |
 | `flow-engine` | 4 | Bidirectional flow tracking with bounded memory and idle expiry |
 | `storage` | 5 | SQLx/PostgreSQL persistence with migrations and retention |
 | `filter-language` | 6 | Display-filter lexer, parser, validator and parameterized SQL translation |

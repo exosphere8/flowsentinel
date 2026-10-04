@@ -63,6 +63,165 @@ def udp_frame(seq: int, payload: bytes = PAYLOAD_MARKER) -> bytes:
     return MAC_B + MAC_A + struct.pack("!H", 0x0800) + ip + udp
 
 
+# --- Protocol builders for the decoder fixtures (Milestone 2) --------------
+
+IP6_A = bytes.fromhex("20010db8000000000000000000000a00")  # 2001:db8::a00
+IP6_B = bytes.fromhex("20010db8000000000000000000001400")  # 2001:db8::1400
+GATEWAY = bytes([192, 0, 2, 1])
+BROADCAST = b"\xff" * 6
+
+
+def eth(ethertype: int, payload: bytes, src: bytes = MAC_A, dst: bytes = MAC_B) -> bytes:
+    return dst + src + struct.pack("!H", ethertype) + payload
+
+
+def vlan_eth(tags: list[tuple[int, int]], ethertype: int, payload: bytes) -> bytes:
+    out = MAC_B + MAC_A
+    for tpid, tci in tags:
+        out += struct.pack("!HH", tpid, tci)
+    return out + struct.pack("!H", ethertype) + payload
+
+
+def ipv4(
+    proto: int,
+    payload: bytes,
+    ident: int = 1,
+    flags_frag: int = 0x4000,
+    ttl: int = 64,
+    src: bytes = IP_A,
+    dst: bytes = IP_B,
+    version_ihl: int = 0x45,
+    total_len: int | None = None,
+) -> bytes:
+    header_len = (version_ihl & 0x0F) * 4
+    total = header_len + len(payload) if total_len is None else total_len
+    hdr = struct.pack(
+        "!BBHHHBBH4s4s", version_ihl, 0, total, ident, flags_frag, ttl, proto, 0, src, dst
+    )
+    hdr += b"\x00" * max(0, header_len - 20)
+    hdr = hdr[:10] + struct.pack("!H", ipv4_checksum(hdr)) + hdr[12:]
+    return hdr + payload
+
+
+def ipv6(next_header: int, payload: bytes, src: bytes = IP6_A, dst: bytes = IP6_B) -> bytes:
+    word0 = (6 << 28) | 0x12345
+    return struct.pack("!IHBB", word0, len(payload), next_header, 64) + src + dst + payload
+
+
+def udp(sport: int, dport: int, payload: bytes = PAYLOAD_MARKER, length: int | None = None) -> bytes:
+    udp_len = 8 + len(payload) if length is None else length
+    return struct.pack("!HHHH", sport, dport, udp_len, 0) + payload
+
+
+TCP_FIN, TCP_SYN, TCP_RST, TCP_PSH, TCP_ACK = 0x01, 0x02, 0x04, 0x08, 0x10
+
+
+def tcp(
+    sport: int,
+    dport: int,
+    flags: int,
+    seq: int,
+    ack: int = 0,
+    payload: bytes = b"",
+    options: bytes = b"",
+    data_offset: int | None = None,
+) -> bytes:
+    offset = (20 + len(options)) // 4 if data_offset is None else data_offset
+    hdr = struct.pack("!HHIIBBHHH", sport, dport, seq, ack, offset << 4, flags, 64240, 0, 0)
+    return hdr + options + payload
+
+
+def icmp(icmp_type: int, ident: int, seq: int, payload: bytes = PAYLOAD_MARKER) -> bytes:
+    return struct.pack("!BBHHH", icmp_type, 0, 0, ident, seq) + payload
+
+
+def arp(op: int, sender_ip: bytes, target_ip: bytes) -> bytes:
+    target_mac = b"\x00" * 6 if op == 1 else MAC_B
+    return struct.pack("!HHBBH", 1, 0x0800, 6, 4, op) + MAC_A + sender_ip + target_mac + target_ip
+
+
+def ext_header(next_header: int, units: int = 0) -> bytes:
+    return bytes([next_header, units]) + b"\x00" * ((units + 1) * 8 - 2)
+
+
+def frag_header(next_header: int, offset: int, more: bool, ident: int) -> bytes:
+    return struct.pack("!BBHI", next_header, 0, (offset // 8) << 3 | int(more), ident)
+
+
+def capture_of(frames: list[bytes], linktype: int = LINKTYPE_ETHERNET, snaplen: int = DEFAULT_SNAPLEN,
+               cut: dict[int, int] | None = None) -> bytes:
+    """Capture with one frame every 10 ms. `cut` maps a frame index to a
+    captured length, simulating a short snapshot length for that frame."""
+    out = global_header("<", snaplen=snaplen, linktype=linktype)
+    for i, frame in enumerate(frames):
+        captured = frame[: cut[i]] if cut and i in cut else frame
+        out += record("<", BASE_TIME + i // 100, (i % 100) * 10_000, captured, orig_len=len(frame))
+    return out
+
+
+def decode_fixtures() -> dict[str, bytes]:
+    mss = bytes([2, 4, 0x05, 0xB4, 1, 1, 4, 2])  # MSS 1460, NOP, NOP, SACK permitted
+    ipv4_frames = [
+        eth(0x0806, arp(1, IP_A, GATEWAY), dst=BROADCAST),
+        eth(0x0806, arp(2, GATEWAY, IP_A), src=MAC_B, dst=MAC_A),
+        eth(0x0800, ipv4(17, udp(40000, 9))),
+        eth(0x0800, ipv4(6, tcp(40001, 9, TCP_SYN, 1000, options=mss))),
+        eth(0x0800, ipv4(6, tcp(9, 40001, TCP_SYN | TCP_ACK, 5000, 1001, options=mss), src=IP_B, dst=IP_A), src=MAC_B, dst=MAC_A),
+        eth(0x0800, ipv4(6, tcp(40001, 9, TCP_ACK, 1001, 5001))),
+        eth(0x0800, ipv4(6, tcp(40001, 9, TCP_PSH | TCP_ACK, 1001, 5001, PAYLOAD_MARKER))),
+        eth(0x0800, ipv4(6, tcp(40001, 9, TCP_FIN | TCP_ACK, 1038, 5001))),
+        eth(0x0800, ipv4(1, icmp(8, 0x0101, 1))),
+        eth(0x0800, ipv4(1, icmp(0, 0x0101, 1), src=IP_B, dst=IP_A), src=MAC_B, dst=MAC_A),
+        vlan_eth([(0x8100, 0x200A)], 0x0800, ipv4(17, udp(40002, 9))),
+        vlan_eth([(0x88A8, 100), (0x8100, 10)], 0x0800, ipv4(17, udp(40003, 9))),
+        # One UDP datagram split into two IPv4 fragments.
+        eth(0x0800, ipv4(17, udp(40004, 9, b"\x00" * 16, length=8 + 40), ident=77, flags_frag=0x2000)),
+        eth(0x0800, ipv4(17, PAYLOAD_MARKER[:24], ident=77, flags_frag=3)),
+    ]
+    ipv6_frames = [
+        eth(0x86DD, ipv6(17, udp(40000, 9))),
+        eth(0x86DD, ipv6(6, tcp(40001, 9, TCP_SYN, 1000, options=mss))),
+        eth(0x86DD, ipv6(58, icmp(128, 0x0202, 1))),
+        eth(0x86DD, ipv6(58, icmp(135, 0, 0, b"\x00" * 16))),
+        eth(0x86DD, ipv6(0, ext_header(60) + ext_header(17, 1) + udp(40005, 9))),
+        eth(0x86DD, ipv6(44, frag_header(17, 0, True, 0xABCD) + udp(40006, 9, b"\x00" * 16, length=8 + 64))),
+        eth(0x86DD, ipv6(44, frag_header(17, 24, False, 0xABCD) + PAYLOAD_MARKER)),
+        eth(0x86DD, ipv6(50, b"\x00" * 8 + PAYLOAD_MARKER)),
+        eth(0x86DD, ipv6(59, b"")),
+    ]
+    unsupported_frames = [
+        eth(0x88CC, b"\x02\x07\x04" + MAC_A + b"\x00" * 20),  # LLDP
+        eth(len(PAYLOAD_MARKER) + 3, b"\xaa\xaa\x03" + PAYLOAD_MARKER),  # 802.3 + LLC
+        eth(0x0800, ipv4(47, b"\x00\x00\x08\x00" + PAYLOAD_MARKER)),  # GRE
+        vlan_eth([(0x88A8, 1), (0x8100, 2), (0x8100, 3)], 0x0800, ipv4(17, udp(40000, 9))),
+        eth(0x0800, ipv4(17, udp(40000, 9))),
+    ]
+    tcp_frame = eth(0x0800, ipv4(6, tcp(40001, 9, TCP_ACK, 1, 1, PAYLOAD_MARKER)))
+    malformed_frames = [
+        eth(0x0800, ipv4(17, udp(40000, 9)))[:10],  # 0: truncated Ethernet
+        eth(0x0800, ipv4(17, udp(40000, 9), version_ihl=0x55)),  # 1: IPv4 version 5
+        eth(0x0800, ipv4(17, udp(40000, 9), version_ihl=0x44)),  # 2: IHL 4
+        eth(0x0800, ipv4(17, udp(40000, 9), total_len=12)),  # 3: total length < header
+        eth(0x0800, ipv4(6, tcp(40001, 9, TCP_ACK, 1, data_offset=4))),  # 4: TCP data offset 4
+        eth(0x0800, ipv4(17, udp(40000, 9, length=4))),  # 5: UDP length < 8
+        eth(0x0800, ipv4(17, udp(40000, 9, length=600))),  # 6: UDP length > IP payload
+        tcp_frame,  # 7: cut inside the TCP header (see `cut`)
+        eth(0x86DD, ipv6(17, udp(40000, 9)))[:14] + b"\x45" + eth(0x86DD, ipv6(17, udp(40000, 9)))[15:],  # 8: IPv6 version 4
+        eth(0x86DD, ipv6(60, bytes([17, 6]) + b"\x00" * 6)),  # 9: ext header longer than payload length
+        eth(0x86DD, ipv6(60, ext_header(17, 1) + udp(40000, 9))),  # 10: cut inside the ext header
+        eth(0x0800, ipv4(17, udp(40000, 9), total_len=1500)),  # 11: total length beyond the frame
+        eth(0x0800, ipv4(17, udp(40000, 9))),  # 12: valid packet after the damage
+    ]
+    raw_frames = [ipv4(17, udp(40000, 9)), ipv4(1, icmp(8, 1, 1))]
+    return {
+        "decode-ipv4.pcap": capture_of(ipv4_frames),
+        "decode-ipv6.pcap": capture_of(ipv6_frames),
+        "decode-unsupported.pcap": capture_of(unsupported_frames),
+        "decode-malformed.pcap": capture_of(malformed_frames, cut={7: 14 + 20 + 12, 10: 14 + 40 + 10}),
+        "decode-raw-linktype.pcap": capture_of(raw_frames, linktype=101),
+    }
+
+
 def global_header(
     endian: str,
     magic: int = MAGIC_USEC,
@@ -155,6 +314,7 @@ def fixtures() -> dict[str, bytes]:
     files["huge-captured-length.pcap"] = (
         global_header(le) + good + struct.pack("<IIII", BASE_TIME + 1, 0, 0xFFFFFFF0, 0xFFFFFFF0)
     )
+    files.update(decode_fixtures())
     return files
 
 

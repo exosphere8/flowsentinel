@@ -1,5 +1,6 @@
 //! `flowsentinel` command-line interface.
 
+mod decode_view;
 mod exit;
 mod inspect;
 
@@ -24,8 +25,9 @@ struct Cli {
 enum Command {
     /// Inspect an offline classic PCAP file and print metadata only.
     ///
-    /// Reads the PCAP global header and per-record headers. Packet contents
-    /// are never printed.
+    /// Reads the PCAP global header and per-record headers. With --decode,
+    /// also decodes Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP and UDP
+    /// headers. Packet contents are never printed.
     ///
     /// Exit codes: 0 success (including partial results at a limit),
     /// 2 usage error, 3 rejected input, 4 malformed capture, 5 I/O error.
@@ -65,6 +67,15 @@ struct InspectArgs {
         value_parser = clap::value_parser!(u64).range(CaptureLimits::MAX_DURATION_SECONDS_RANGE),
     )]
     max_duration_seconds: u64,
+
+    /// Decode protocol headers (Ethernet, ARP, IPv4, IPv6, ICMP, ICMPv6, TCP,
+    /// UDP) into metadata. Payloads are measured, never shown.
+    #[arg(long)]
+    decode: bool,
+
+    /// With --decode, print each packet's protocol tree and decode warnings.
+    #[arg(long, requires = "decode")]
+    verbose: bool,
 
     /// Print one JSON object on stdout instead of tables. Errors are also
     /// printed as JSON on stdout.
@@ -138,6 +149,14 @@ mod tests {
         let args = inspect_args(&["--pcap", "a.pcap"]).unwrap();
         assert_eq!(args.limits(), CaptureLimits::default());
         assert!(!args.json);
+    }
+
+    #[test]
+    fn verbose_requires_decode() {
+        let err = inspect_args(&["--pcap", "a.pcap", "--verbose"]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::MissingRequiredArgument);
+        let args = inspect_args(&["--pcap", "a.pcap", "--decode", "--verbose", "--json"]).unwrap();
+        assert!(args.decode && args.verbose && args.json);
     }
 
     #[test]

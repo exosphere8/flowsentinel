@@ -44,6 +44,8 @@ cargo build --workspace
 - Binary fixtures come from scripts. To add a PCAP fixture, extend
   `scripts/generate_pcap_fixtures.py`, run `make fixtures`, and commit both the script and the
   output. CI fails if the committed fixtures differ from the script's output.
+- Parsers of untrusted input need property tests, and should be added to the cargo-fuzz targets
+  in `fuzz/` (see `fuzz/README.md`). Run a fuzz session after changing a parser.
 - Keep documentation in sync: user-visible changes update the README or `docs/`.
 
 ## Branches and commits

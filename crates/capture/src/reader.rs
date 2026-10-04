@@ -1,8 +1,10 @@
 //! Streaming reader for classic PCAP record headers.
 //!
 //! The reader pulls bytes from any [`BufRead`] source, so memory use does not
-//! depend on file size. Packet data is read past and discarded; it is never
-//! returned or retained.
+//! depend on file size. [`PcapReader::next_record`] reads past packet data and
+//! discards it. [`PcapReader::next_packet`] copies at most
+//! [`MAX_PACKET_DATA_BYTES`] of it into a caller-owned, reusable buffer so a
+//! decoder can examine it transiently; nothing is retained by the reader.
 
 use std::io::{self, BufRead, Read};
 
@@ -21,6 +23,10 @@ pub const RECORD_HEADER_LEN: usize = 16;
 /// corruption, so the reader stops instead of trusting the length. A few link
 /// types allow more; see [`LinkType::max_captured_length`].
 pub const MAX_SAFE_CAPTURED_LENGTH: u32 = LinkType::DEFAULT_MAX_CAPTURED_LENGTH;
+
+/// Most bytes of one record that [`PcapReader::next_packet`] hands out. Any
+/// remainder (possible only for link types with larger maximums) is skipped.
+pub const MAX_PACKET_DATA_BYTES: u32 = LinkType::DEFAULT_MAX_CAPTURED_LENGTH;
 
 /// Metadata of one packet record. Contains no packet bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -109,6 +115,25 @@ impl<R: BufRead> PcapReader<R> {
     /// Returns `Ok(None)` at a clean end of file (no bytes after the previous
     /// record).
     pub fn next_record(&mut self) -> Result<Option<PacketRecordMetadata>, CaptureError> {
+        self.read_record(None)
+    }
+
+    /// Reads the next record and replaces the contents of `data` with its
+    /// captured bytes, up to [`MAX_PACKET_DATA_BYTES`]. Reusing one buffer
+    /// across calls keeps allocation bounded by the largest record seen.
+    ///
+    /// On error, `data` holds an unspecified partial record.
+    pub fn next_packet(
+        &mut self,
+        data: &mut Vec<u8>,
+    ) -> Result<Option<PacketRecordMetadata>, CaptureError> {
+        self.read_record(Some(data))
+    }
+
+    fn read_record(
+        &mut self,
+        data: Option<&mut Vec<u8>>,
+    ) -> Result<Option<PacketRecordMetadata>, CaptureError> {
         let index = self.records_read.saturating_add(1);
         let file_offset = self.offset;
 
@@ -152,15 +177,16 @@ impl<R: BufRead> PcapReader<R> {
         }
 
         let expected = u64::from(captured_length);
-        let skipped = io::copy(&mut (&mut self.source).take(expected), &mut io::sink())
+        let consumed = self
+            .consume_data(expected, data)
             .map_err(CaptureError::io("reading packet data"))?;
-        self.offset = self.offset.saturating_add(skipped);
-        if skipped < expected {
+        self.offset = self.offset.saturating_add(consumed);
+        if consumed < expected {
             return Err(CaptureError::TruncatedRecordData {
                 packet_index: index,
                 offset: file_offset,
                 expected: captured_length,
-                available: skipped,
+                available: consumed,
             });
         }
 
@@ -197,6 +223,25 @@ impl<R: BufRead> PcapReader<R> {
             captured_length,
             original_length,
         }))
+    }
+
+    /// Consumes `len` bytes of packet data, copying up to
+    /// [`MAX_PACKET_DATA_BYTES`] of them into `keep` if given. Returns the
+    /// number of bytes consumed, which is less than `len` only at end of input.
+    fn consume_data(&mut self, len: u64, keep: Option<&mut Vec<u8>>) -> io::Result<u64> {
+        let mut consumed = 0;
+        if let Some(buf) = keep {
+            buf.clear();
+            let wanted = len.min(u64::from(MAX_PACKET_DATA_BYTES));
+            let kept = (&mut self.source).take(wanted).read_to_end(buf)?;
+            consumed = u64::try_from(kept).unwrap_or(u64::MAX);
+            if consumed < wanted {
+                return Ok(consumed);
+            }
+        }
+        let rest = len.saturating_sub(consumed);
+        let skipped = io::copy(&mut (&mut self.source).take(rest), &mut io::sink())?;
+        Ok(consumed.saturating_add(skipped))
     }
 }
 
@@ -306,6 +351,53 @@ mod tests {
             assert_eq!(r.records_read(), 2);
             assert!(r.warnings().is_empty());
         }
+    }
+
+    #[test]
+    fn next_packet_hands_out_record_bytes() {
+        let mut bytes = global_header(false, false, 65535);
+        bytes.extend(record(false, 1, 0, 6, 6));
+        bytes.extend(record(false, 2, 0, 3, 3));
+        let mut r = reader(bytes);
+        let mut data = Vec::new();
+        let first = r.next_packet(&mut data).unwrap().unwrap();
+        assert_eq!(first.captured_length, 6);
+        assert_eq!(data, vec![0xAB; 6]);
+        r.next_packet(&mut data).unwrap().unwrap();
+        assert_eq!(data, vec![0xAB; 3], "buffer is replaced, not appended");
+        assert!(r.next_packet(&mut data).unwrap().is_none());
+    }
+
+    #[test]
+    fn next_packet_caps_handed_out_bytes_and_skips_the_rest() {
+        let len = MAX_PACKET_DATA_BYTES + 1000;
+        let mut bytes = global_header(false, false, 65535);
+        bytes[20..24].copy_from_slice(&u32::from(LinkType::USBPCAP.0).to_le_bytes());
+        bytes.extend(record(false, 1, 0, len, len));
+        bytes.extend(record(false, 2, 0, 4, 4));
+        let mut r = reader(bytes);
+        let mut data = Vec::new();
+        assert_eq!(
+            r.next_packet(&mut data).unwrap().unwrap().captured_length,
+            len
+        );
+        assert_eq!(data.len(), MAX_PACKET_DATA_BYTES as usize);
+        let second = r.next_packet(&mut data).unwrap().unwrap();
+        assert_eq!(second.file_offset, 24 + 16 + u64::from(len));
+        assert_eq!(data.len(), 4);
+    }
+
+    #[test]
+    fn next_packet_reports_truncated_data() {
+        let mut bytes = global_header(false, false, 65535);
+        let mut rec = record(false, 1, 0, 100, 100);
+        rec.truncate(16 + 30);
+        bytes.extend(rec);
+        let mut data = Vec::new();
+        assert!(matches!(
+            reader(bytes).next_packet(&mut data),
+            Err(CaptureError::TruncatedRecordData { available: 30, .. })
+        ));
     }
 
     #[test]

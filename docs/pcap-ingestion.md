@@ -1,8 +1,9 @@
 # Offline PCAP ingestion
 
-`flowsentinel inspect` reads an offline capture file and reports **container metadata only**: the
-PCAP global header and the header of each packet record. It does not decode Ethernet, IP or any
-higher protocol, and it never prints, stores or logs packet contents.
+`flowsentinel inspect` reads an offline capture file. By default it reports **container metadata only**: the
+PCAP global header and the header of each packet record. Without `--decode` it does not interpret
+packet contents at all; with `--decode` it also decodes protocol headers (see
+[protocol-decoding.md](protocol-decoding.md)). It never prints, stores or logs packet contents.
 
 > Inspect only captures you own or are explicitly authorized to analyze.
 
@@ -59,7 +60,7 @@ Packets
   length. Both are corrected and produce an `unusual_version_minor` warning. Versions above 2.4
   are rejected.
 - Any link-layer type. The type is reported by number and, when recognized, by its `LINKTYPE_*`
-  name. Packets are not decoded in this milestone, so the link type does not change processing.
+  name. Reading the container works the same for every link type; `--decode` decodes Ethernet only.
 
 Not supported:
 

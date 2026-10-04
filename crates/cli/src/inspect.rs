@@ -3,23 +3,34 @@
 use std::io::{self, BufWriter, Write};
 use std::process::ExitCode;
 
-use capture::{CaptureError, CaptureReport, CompletionState, Timestamp, inspect_file};
+use capture::{
+    CaptureError, CaptureReport, CompletionState, MonotonicClock, PacketSink, Timestamp,
+    inspect_file_with_sink,
+};
 use serde::Serialize;
 
 use crate::InspectArgs;
+use crate::decode_view::{self, DecodeCollector, Decoded};
 use crate::exit;
 
 pub fn run(args: &InspectArgs) -> ExitCode {
-    let result = inspect_file(&args.pcap, &args.limits());
+    let mut collector = args.decode.then(DecodeCollector::default);
+    let result = inspect_file_with_sink(
+        &args.pcap,
+        &args.limits(),
+        &MonotonicClock::start(),
+        collector.as_mut().map(|c| c as &mut dyn PacketSink),
+    );
+    let decoded = collector.map(|c| c.decoded);
     let stdout = io::stdout();
     let mut out = BufWriter::new(stdout.lock());
 
     let (written, code) = match &result {
         Ok(report) => {
-            let written = if args.json {
-                write_json(&mut out, report)
-            } else {
-                write_human(&mut out, report)
+            let written = match (&decoded, args.json) {
+                (Some(decoded), true) => decode_view::write_json(&mut out, report, decoded),
+                (None, true) => write_json(&mut out, report),
+                (decoded, false) => write_human(&mut out, report, decoded.as_ref(), args.verbose),
             };
             (written, ExitCode::SUCCESS)
         }
@@ -85,7 +96,12 @@ fn timestamp_or_dash(ts: Option<Timestamp>) -> String {
     ts.map_or_else(|| "-".to_owned(), |ts| ts.to_rfc3339())
 }
 
-fn write_human(out: &mut impl Write, report: &CaptureReport) -> io::Result<()> {
+fn write_human(
+    out: &mut impl Write,
+    report: &CaptureReport,
+    decoded: Option<&Decoded>,
+    verbose: bool,
+) -> io::Result<()> {
     let s = &report.summary;
     let h = &s.header;
     let link_name = h.link_type_name.unwrap_or("unknown");
@@ -170,6 +186,11 @@ fn write_human(out: &mut impl Write, report: &CaptureReport) -> io::Result<()> {
     }
 
     writeln!(out)?;
+    if let Some(decoded) = decoded {
+        decode_view::write_summary(out, &decoded.summary)?;
+        writeln!(out)?;
+        return decode_view::write_packets(out, report, decoded, verbose);
+    }
     writeln!(out, "Packets")?;
     if report.packets.is_empty() {
         writeln!(out, "  none")?;
@@ -232,7 +253,7 @@ mod tests {
 
     fn human(report: &CaptureReport) -> String {
         let mut out = Vec::new();
-        write_human(&mut out, report).unwrap();
+        write_human(&mut out, report, None, false).unwrap();
         String::from_utf8(out).unwrap()
     }
 
