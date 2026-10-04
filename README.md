@@ -23,6 +23,9 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
 - **Milestone 2, core packet decoding:** `inspect --decode` decodes Ethernet (with VLANs), ARP,
   IPv4, IPv6 (with extension headers), ICMP, ICMPv6, TCP and UDP headers into a protocol tree.
   Payloads are measured, never shown.
+- **Milestone 3, application metadata:** `inspect --decode` also extracts bounded metadata from
+  DNS, DHCP, HTTP/1.x and visible TLS handshakes (SNI, ALPN, versions, cipher-suite IDs).
+  Credentials, cookies, query strings and bodies are redacted; TLS is never decrypted.
 
 ## Quick start
 
@@ -78,6 +81,21 @@ cargo run -p cli -- inspect --pcap fixtures/pcap/decode-malformed.pcap --decode 
 See [docs/protocol-decoding.md](docs/protocol-decoding.md) for supported protocols, statuses,
 warnings and validation rules.
 
+Application protocols are recognized by structure, never by port alone:
+
+```bash
+cargo run -p cli -- inspect --pcap fixtures/pcap/app-dns.pcap --decode
+cargo run -p cli -- inspect --pcap fixtures/pcap/app-tls.pcap --decode --verbose
+```
+
+```text
+        #  Timestamp (UTC)                 Source         Destination    Protocol  Length  Info
+        1  2026-01-01T00:00:00.000000Z     192.0.2.10     198.51.100.80  TLS          268  TLS ClientHello SNI=www.example.com ALPN=h2,http/1.1 (handshake metadata only)
+```
+
+See [docs/application-metadata.md](docs/application-metadata.md) for fields, limits and redaction
+rules.
+
 ### Windows note
 
 When a checkout sits in a deeply nested folder, Cargo's build-script paths can exceed the classic
@@ -121,7 +139,7 @@ crates/
   api-server/   Axum HTTP service (GET /health)
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
-  decoder/      Bounds-checked protocol decoder (metadata only)
+  decoder/      Bounds-checked protocol and application-metadata decoder
 docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
@@ -136,7 +154,7 @@ tests/          Cross-service end-to-end tests (from Milestone 5)
 | 0 | Foundation and developer environment | Done |
 | 1 | Safe offline PCAP ingestion | Done |
 | 2 | Core packet decoder (Ethernet, ARP, IPv4/6, ICMP, TCP, UDP) | Done |
-| 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Planned |
+| 3 | Application metadata (DNS, DHCP, HTTP/1.1, TLS handshake) | Done |
 | 4 | Bidirectional flow reconstruction | Planned |
 | 5 | PostgreSQL persistence and REST API | Planned |
 | 6 | Display-filter language | Planned |

@@ -65,8 +65,9 @@ by its tree:
 | Transport | UDP | Ports, length field, payload length |
 
 Not decoded: other link types (Linux cooked, raw IP, 802.11, …), 802.3/LLC frames, other
-EtherTypes (LLDP, MPLS, PPPoE, …), other IP protocols (GRE, ESP, SCTP, …), TCP/IP option
-contents, and every payload. Application protocols arrive in Milestone 3.
+EtherTypes (LLDP, MPLS, PPPoE, …), other IP protocols (GRE, ESP, SCTP, …) and TCP/IP option
+contents. Payloads are never shown. DNS, DHCP, HTTP/1.x and TLS handshakes add an application
+layer with bounded metadata; see [application-metadata.md](application-metadata.md).
 
 ## Status and warnings
 
@@ -201,22 +202,35 @@ Layers are tagged by `"layer"`. TCP flags serialize as `{"bits": 18, "names": ["
 - **Fuzzing.** `fuzz/` holds cargo-fuzz targets for the decoder and for whole captures; see
   [fuzz/README.md](../fuzz/README.md).
 - **Independent cross-check.** During development, every decoded field of the decode fixtures
-  was compared against Scapy (433 field comparisons, 0 mismatches).
+  was compared against Scapy (454 field comparisons, 0 mismatches).
 
 ## Memory
 
-Decoded packets are kept until output is written, so memory grows with `--max-packets`. Measured
-peak resident memory for a synthetic capture of 100,000 Ethernet/IPv4/TCP packets (release build,
-Linux):
+With `--decode`, the capture is read **twice**. The first pass computes the capture and decode
+summaries, which are printed first. The second pass decodes the same packets again and writes each
+one immediately. No decoded packet is kept, so memory does not grow with the number of packets.
+The second pass reads exactly as many packets as the first. Each pass also fingerprints what it
+read (the global header and every record's metadata and bytes). If the file changes between the
+passes, the command reports `the capture changed while it was being read` and exits with code 5.
+With `--json`, the object stays valid and gains an `error` member with code `capture_changed`.
 
-| Command | Peak RSS |
-| --- | --- |
-| `inspect` | 9.9 MB |
-| `inspect --decode` | 34.6 MB |
-| `inspect --decode --json` | 36.1 MB |
+`--max-duration-seconds` limits the first pass, which decides which packets are reported. The
+second pass is bounded by that packet count and a one-hour cap instead, because its speed also
+depends on how fast the output is consumed (for example by a pager). The total running time can
+therefore exceed the limit, by roughly the time the first pass took plus the output time.
 
-That is roughly 250–270 bytes per decoded packet. At the default limit of 100,000 packets this
-stays under 40 MB; at the `--max-packets` ceiling of 1,000,000 expect roughly 250–350 MB.
+Measured peak resident memory and wall time for a synthetic capture of 100,000 Ethernet/IPv4/TCP
+packets (release build, Linux):
+
+| Command | Peak RSS | Time |
+| --- | --- | --- |
+| `inspect` | 9.9 MB | 0.05 s |
+| `inspect --decode` | 10.2 MB | 0.15 s |
+| `inspect --decode --json` | 10.4 MB | 0.26 s |
+| `inspect --decode --verbose` | 10.3 MB | 0.31 s |
+
+The remaining growth is the 40-byte-per-record packet table from
+[pcap-ingestion.md](pcap-ingestion.md).
 
 ## Fixtures
 

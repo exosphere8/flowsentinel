@@ -3,7 +3,9 @@
 //! [`decode_packet`] turns the captured bytes of one packet into a
 //! [`DecodedPacket`]: a protocol tree of typed headers plus a status and
 //! warnings. Supported: Ethernet II (with up to two VLAN tags), ARP, IPv4,
-//! IPv6 (with bounded extension-header traversal), ICMP, ICMPv6, TCP and UDP.
+//! IPv6 (with bounded extension-header traversal), ICMP, ICMPv6, TCP and UDP,
+//! plus application metadata for DNS, DHCP, HTTP/1.x and visible TLS
+//! handshake fields (see [`app`]).
 //!
 //! Safety properties:
 //!
@@ -16,6 +18,7 @@
 //! - One packet's result never depends on another's, so a malformed packet
 //!   cannot affect later packets.
 
+pub mod app;
 mod bytes;
 mod context;
 mod describe;

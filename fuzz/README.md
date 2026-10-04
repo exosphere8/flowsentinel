@@ -8,6 +8,7 @@ main workspace, so stable builds and CI do not need a nightly toolchain.
 | --- | --- | --- |
 | `decode_packet` | One packet; the first byte selects Ethernet or another link type | `decoder::decode_packet`, `info`, `endpoints`, `Layer::describe` |
 | `pcap_reader` | A whole capture file | `capture` header/record parsing and limits, plus decoding of every record |
+| `application` | A transport payload; the first byte selects TCP/UDP, a port (53, 5353, 5355, 67, 68, 80, 443, 9) and whether the frame is snapshot-cut halfway through the payload | DNS, DHCP, HTTP and TLS parsers behind a valid frame, complete and cut |
 
 ```bash
 rustup toolchain install nightly

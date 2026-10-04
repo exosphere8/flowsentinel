@@ -1,6 +1,7 @@
 //! TCP, UDP, ICMP and ICMPv6 headers.
 
-use crate::bytes::{slice, u8_at, u16_at, u32_at};
+use crate::app::{self, AppTransport, Payload};
+use crate::bytes::{rest, slice, u8_at, u16_at, u32_at};
 use crate::context::Context;
 use crate::model::{
     DecodeStatus, DecodeWarningCode, IcmpHeader, Layer, Protocol, TcpFlags, TcpHeader, UdpHeader,
@@ -113,6 +114,21 @@ pub(crate) fn decode_tcp(ctx: &mut Context, data: &[u8], enc: Encapsulation) {
         options_length: u8::try_from(header_len.saturating_sub(TCP_MIN_HEADER)).unwrap_or(u8::MAX),
         payload_length: clamp_u16(payload_length),
     }));
+
+    // Fragments carry only part of the segment; their payload is not
+    // examined for application messages.
+    if !enc.fragmented {
+        app::decode(
+            ctx,
+            Payload {
+                transport: AppTransport::Tcp,
+                source_port,
+                destination_port,
+                bytes: rest(data, header_len),
+                declared_length: payload_length,
+            },
+        );
+    }
 }
 
 pub(crate) fn decode_udp(ctx: &mut Context, data: &[u8], enc: Encapsulation) {
@@ -141,20 +157,40 @@ pub(crate) fn decode_udp(ctx: &mut Context, data: &[u8], enc: Encapsulation) {
 
     if declared < UDP_HEADER {
         ctx.malformed(Protocol::Udp, "UDP length is below the 8-byte header size");
-    } else if !enc.fragmented && declared > enc.declared_length {
+        return;
+    }
+    if enc.fragmented {
+        return;
+    }
+    if declared > enc.declared_length {
         ctx.stop(
             DecodeStatus::Malformed,
             DecodeWarningCode::LengthMismatch,
             Some(Protocol::Udp),
             "UDP length exceeds the IP payload length",
         );
-    } else if !enc.fragmented && declared < enc.declared_length {
+        return;
+    }
+    if declared < enc.declared_length {
         ctx.warn(
             DecodeWarningCode::LengthMismatch,
             Some(Protocol::Udp),
             "UDP length is shorter than the IP payload length",
         );
     }
+    let payload = data
+        .get(UDP_HEADER..declared.min(data.len()))
+        .unwrap_or(&[]);
+    app::decode(
+        ctx,
+        Payload {
+            transport: AppTransport::Udp,
+            source_port,
+            destination_port,
+            bytes: payload,
+            declared_length: declared.saturating_sub(UDP_HEADER),
+        },
+    );
 }
 
 pub(crate) fn decode_icmp(ctx: &mut Context, data: &[u8], enc: Encapsulation, protocol: Protocol) {
