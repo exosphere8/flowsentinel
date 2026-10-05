@@ -16,6 +16,7 @@ use crate::auth::{AuthConfig, MAX_CONCURRENT_HASHES};
 use crate::error::ApiError;
 use crate::host::HostPolicy;
 use crate::live::{LiveConfig, LiveManager};
+use crate::observability::Metrics;
 use crate::ratelimit::LoginLimiter;
 
 /// Longest wait for a database slot before a request is refused.
@@ -63,6 +64,8 @@ pub struct AppState {
     pub login_limiter: Arc<LoginLimiter>,
     /// The live capture slot and packet sources.
     pub live: Arc<LiveManager>,
+    /// Request and audit-event counters.
+    pub metrics: Arc<Metrics>,
 }
 
 impl AppState {
@@ -79,6 +82,7 @@ impl AppState {
             hash_slots: Arc::new(Semaphore::new(MAX_CONCURRENT_HASHES)),
             login_limiter: Arc::new(LoginLimiter::new()),
             live: Arc::new(LiveManager::new(Arc::from(live_capture::default_factory()))),
+            metrics: Arc::new(Metrics::default()),
         }
     }
 

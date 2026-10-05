@@ -13,6 +13,8 @@ authors = ["exosphere8"]
 cargo-fuzz = true
 
 [dependencies]
+api-server = { path = "../crates/api-server" }
+live-capture = { path = "../crates/live-capture" }
 capture = { path = "../crates/capture" }
 decoder = { path = "../crates/decoder" }
 detection-engine = { path = "../crates/detection-engine" }
@@ -65,3 +67,10 @@ bench = false
 
 [workspace]
 members = ["."]
+
+[[bin]]
+name = "request_inputs"
+path = "fuzz_targets/request_inputs.rs"
+test = false
+doc = false
+bench = false

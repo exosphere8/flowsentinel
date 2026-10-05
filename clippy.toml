@@ -1,0 +1,6 @@
+# Tests may unwrap, expect, panic and index: a failure there is a test
+# failure. Non-test code may not (see [workspace.lints.clippy]).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

@@ -103,7 +103,7 @@ pub async fn guard(
     request: Request,
     next: Next,
 ) -> Response {
-    if request.uri().path() == "/health" {
+    if matches!(request.uri().path(), "/health" | "/ready") {
         return next.run(request).await;
     }
     let host = request

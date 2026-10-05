@@ -60,8 +60,14 @@ will live. It is updated at the end of every milestone.
   bounded channel, so a large upload never sits in memory.
 - `dashboard.rs` serves the dashboard's static files with an `index.html` fallback for its
   client-side routes, and adds the security headers (CSP, `nosniff`, `X-Frame-Options`,
-  `Referrer-Policy`, `Cross-Origin-Opener-Policy`) to every response. Unknown `/api/v1` paths
+  `Referrer-Policy`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`,
+  `Permissions-Policy`, and HSTS behind HTTPS) to every response. Unknown `/api/v1` paths
   keep their JSON `404`.
+- `observability.rs` is the outermost layer. It gives each request an ID and a `request` span,
+  writes one access-log line with the matched route template (`mark_route` records it), and
+  counts requests, durations and audit events for the optional Prometheus listener.
+  `telemetry.rs` sets up JSON logs and, with the `otel` feature, the OpenTelemetry exporter.
+  `GET /ready` checks the database; `GET /health` does not.
 - `healthcheck.rs` implements `flowsentinel-api healthcheck`, a minimal `GET /health` probe used
   by the container health check, so the image needs no `curl`.
 - `host.rs` refuses requests whose `Host` header is not a name of the server (DNS-rebinding

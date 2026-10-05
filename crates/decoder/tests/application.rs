@@ -1,4 +1,10 @@
 //! Application-layer recognition rules, exercised through `decode_packet`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 mod common;
 

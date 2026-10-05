@@ -1,5 +1,11 @@
 //! Property tests: decoding arbitrary bytes never panics, and structured
 //! random headers never produce inconsistent results.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 mod common;
 

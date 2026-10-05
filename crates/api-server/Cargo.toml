@@ -12,6 +12,10 @@ publish.workspace = true
 [dependencies]
 analysis.workspace = true
 live-capture.workspace = true
+opentelemetry = { workspace = true, optional = true }
+opentelemetry_sdk = { workspace = true, optional = true }
+opentelemetry-otlp = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
 argon2.workspace = true
 axum.workspace = true
 capture.workspace = true
@@ -36,6 +40,8 @@ utoipa.workspace = true
 [features]
 # Live capture through libpcap (needs libpcap-dev on Linux; see docs/live-capture.md).
 live-capture = ["live-capture/libpcap"]
+# Export traces with OpenTelemetry (OTLP/HTTP); see docs/observability.md.
+otel = ["dep:opentelemetry", "dep:opentelemetry_sdk", "dep:opentelemetry-otlp", "dep:tracing-opentelemetry"]
 
 [dev-dependencies]
 storage = { workspace = true, features = ["test-support"] }

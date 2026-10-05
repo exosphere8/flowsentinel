@@ -1,0 +1,18 @@
+# Secret scanning (gitleaks, run in CI). The default rules apply everywhere
+# except where the repository holds deliberately fake credentials: the
+# synthetic fixtures and their generator plant "secret" markers in HTTP
+# headers, and tests use throwaway passwords, so that tests can prove such
+# values never reach storage, logs or API responses.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic fixtures and tests"
+paths = [
+    '''^fixtures/''',
+    '''^scripts/generate_pcap_fixtures\.py$''',
+    '''(^|/)tests/''',
+    '''^frontend/e2e/''',
+    '''\.test\.tsx?$''',
+]

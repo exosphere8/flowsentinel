@@ -58,7 +58,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo build --workspace
 make test-db   # storage and API tests against PostgreSQL (CI runs these too)
+cargo deny check   # advisories, licenses, sources (cargo install cargo-deny --locked)
 ```
+
+CI also builds and tests the optional features (`--features api-server/live-capture`,
+`--features api-server/otel`), runs `npm audit --audit-level=high`, scans the Git history for
+secrets with gitleaks, and runs CodeQL (see [docs/hardening.md](docs/hardening.md)).
+
+For changes that could affect speed, compare `cargo bench -p analysis` before and after, and run
+`scripts/load_test.py` against a local server ([docs/performance.md](docs/performance.md)).
 
 For dashboard changes, also run in `frontend/`:
 
@@ -82,7 +90,9 @@ cd frontend && npm run gen:api
 ## Coding standards
 
 - Idiomatic, `rustfmt`-formatted Rust. `unsafe` is forbidden workspace-wide.
-- Do not use `unwrap`, `expect` or unchecked indexing outside tests. Return typed errors
+- Do not use `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!` or unchecked indexing
+  outside tests; clippy denies them (`[workspace.lints.clippy]`, `clippy.toml`). Integration
+  tests, benches and test helpers allow them at the top of the file. Return typed errors
   (`thiserror`) with messages that tell the user what to do next.
 - Treat every input as hostile: bound lengths, use checked arithmetic and never allocate from
   an untrusted size.

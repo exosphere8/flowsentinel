@@ -38,6 +38,34 @@ pub struct Upload {
     pub sha256: String,
 }
 
+/// Checks that other users cannot tamper with the upload directory: on
+/// Unix, a directory writable by its group or by others must have the
+/// sticky bit (like `/tmp`), so nobody else can replace or delete the
+/// server's files. Uploads themselves are created with random names and
+/// owner-only permissions.
+pub fn check_directory(dir: &Path) -> Result<(), String> {
+    let metadata = std::fs::metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !metadata.is_dir() {
+        return Err(format!("{} is not a directory", dir.display()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = metadata.permissions().mode();
+        let shared = mode & 0o022 != 0;
+        let sticky = mode & 0o1000 != 0;
+        if shared && !sticky {
+            return Err(format!(
+                "{} is writable by other users (mode {:o}); use a directory only the server \
+                 can write to (chmod 700)",
+                dir.display(),
+                mode & 0o7777
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Writes `body` to a new temporary file in `dir`, enforcing `max_bytes`
 /// while streaming. The file name is random and ends in `.pcap` so the
 /// capture reader's extension check applies. On Unix the file is created
@@ -153,6 +181,31 @@ mod tests {
         assert!(too_slow(1, secs(31)));
         assert!(!too_slow(16 * 1024 * 40, secs(40)));
         assert!(too_slow(16 * 1024 * 40 - 1, secs(40)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_upload_directories_are_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let set = |mode| {
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(mode)).unwrap()
+        };
+        set(0o700);
+        assert!(check_directory(dir.path()).is_ok());
+        set(0o777);
+        assert!(
+            check_directory(dir.path())
+                .unwrap_err()
+                .contains("chmod 700")
+        );
+        set(0o775);
+        assert!(check_directory(dir.path()).is_err());
+        // Like /tmp: shared but sticky.
+        set(0o1777);
+        assert!(check_directory(dir.path()).is_ok());
+        set(0o700);
+        assert!(check_directory(&dir.path().join("missing")).is_err());
     }
 
     #[test]

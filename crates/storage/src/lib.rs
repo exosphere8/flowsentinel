@@ -14,7 +14,7 @@ pub mod testing;
 
 use std::time::Duration;
 
-use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use accounts::{
@@ -402,11 +402,31 @@ fn push_condition(builder: &mut QueryBuilder<'_, Postgres>, condition: Option<&d
 
 impl Storage {
     /// Connects with a bounded pool and a connect timeout.
+    ///
+    /// Every connection is named `flowsentinel-api` (visible in
+    /// `pg_stat_activity`), and PostgreSQL ends any statement running longer
+    /// than five minutes and any transaction left idle for five minutes, so a
+    /// stuck client cannot hold locks or connections. TLS follows the URL's
+    /// `sslmode` (for example `?sslmode=verify-full`), verified against the
+    /// system's certificate store or `sslrootcert`.
     pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self, StorageError> {
+        let options: PgConnectOptions = database_url.parse().map_err(StorageError::Connection)?;
+        Self::connect_with(options, max_connections).await
+    }
+
+    /// [`connect`](Self::connect) with parsed options.
+    pub async fn connect_with(
+        options: PgConnectOptions,
+        max_connections: u32,
+    ) -> Result<Self, StorageError> {
+        let options = options.application_name("flowsentinel-api").options([
+            ("statement_timeout", "300s"),
+            ("idle_in_transaction_session_timeout", "300s"),
+        ]);
         let pool = PgPoolOptions::new()
             .max_connections(max_connections.max(1))
             .acquire_timeout(Duration::from_secs(10))
-            .connect(database_url)
+            .connect_with(options)
             .await
             .map_err(StorageError::Connection)?;
         Ok(Self::from_pool(pool))

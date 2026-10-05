@@ -26,6 +26,9 @@ pub fn path_of(parts: &Parts) -> String {
 /// Stores an event and logs it. A storage failure is logged with the event
 /// and does not fail the request, which has already happened.
 pub async fn record(state: &AppState, event: NewAuditEvent) {
+    state
+        .metrics
+        .record_audit(event.action, event.outcome.as_str());
     tracing::info!(
         target: "audit",
         action = event.action,

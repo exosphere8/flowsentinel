@@ -1,5 +1,11 @@
 //! Every rule against synthetic traffic: one scenario that should alert and
 //! one similar scenario that should not.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use capture::{Timestamp, TimestampResolution};
 use decoder::{LINKTYPE_ETHERNET, TcpFlags, decode_packet};

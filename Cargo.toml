@@ -44,11 +44,16 @@ getrandom = "0.4.3"
 futures-util = { version = "0.3.34", default-features = false }
 libc = "0.2.190"
 pcap = "2.5.0"
+# OpenTelemetry export (api-server feature `otel` only).
+opentelemetry = "0.33.0"
+opentelemetry_sdk = "0.33.0"
+opentelemetry-otlp = { version = "0.33.0", default-features = false, features = ["http-proto", "trace", "reqwest-blocking-client"] }
+tracing-opentelemetry = "0.34.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
 # 0.8 is the newest line that supports the workspace's Rust 1.85 minimum.
-sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres", "macros", "migrate", "json", "ipnetwork"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-native-roots", "postgres", "macros", "migrate", "json", "ipnetwork"] }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 # 1.x supports the workspace's Rust 1.85 minimum.
@@ -69,6 +74,14 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+# Hostile input must never crash the server or the CLI: no panicking
+# shortcuts outside tests (clippy.toml allows them in tests).
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 [profile.release]
 lto = "thin"

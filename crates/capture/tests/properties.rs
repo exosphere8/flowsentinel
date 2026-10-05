@@ -1,5 +1,11 @@
 //! Property tests: the reader must never panic or loop on arbitrary input, and
 //! must report exactly what a well-formed capture contains.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::io::Cursor;
 use std::time::Duration;

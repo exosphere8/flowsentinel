@@ -73,8 +73,10 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   imports, and shutdown waits at most 30 seconds for running requests.
 - Every response carries a strict Content Security Policy (same-origin scripts, styles and
   connections only; no inline scripts, plugins or framing), `X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
-  `Cross-Origin-Opener-Policy: same-origin`. The dashboard renders all capture-derived text
+  `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy` and
+  `Cross-Origin-Resource-Policy: same-origin`, and a `Permissions-Policy` denying device APIs;
+  HSTS when served through HTTPS (`FLOWSENTINEL_SECURE_COOKIES=true`). API responses are never
+  cached (`Cache-Control: no-store`). The dashboard renders all capture-derived text
   (file names, DNS names, HTTP paths, TLS server names) as text, never as HTML; ESLint rejects
   `dangerouslySetInnerHTML`, `innerHTML` and `outerHTML`. It refuses to render payload-like
   fields even if the API were to send them. It loads nothing from third-party origins. Details:
@@ -83,7 +85,21 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   user (UID 10001), with a read-only root file system, all Linux capabilities dropped and
   `no-new-privileges`; only the upload volume is writable, and the port is published on
   `127.0.0.1`. Its health check uses the server binary itself, so the image contains no shell
-  tools for it.
+  tools for it. The `app` container is limited to 256 processes, and the database containers
+  also run with `no-new-privileges`.
+- The server refuses to start with an upload directory that other users can write to (unless it
+  has the sticky bit, like `/tmp`). PostgreSQL ends statements and idle transactions after five
+  minutes, and database connections can use TLS with certificate verification
+  (`sslmode=verify-full`).
+- Logs, metrics and traces never contain request bodies, query strings (which can hold display
+  filters), credentials or packet data; they record route templates. The optional metrics
+  listener has no authentication and is off by default. Details:
+  [docs/observability.md](docs/observability.md).
+- Supply chain: CI checks Rust dependencies against the RustSec advisory database, licenses and
+  sources (`cargo-deny`, `deny.toml`), runs `npm audit` for the dashboard, scans the whole Git
+  history for secrets (gitleaks), and runs CodeQL on the dashboard and the workflows. Fuzz targets
+  cover the packet parsers, the filter language and the API's request-input checks. Deployment
+  checklist: [docs/hardening.md](docs/hardening.md).
 - Live capture is passive and opt-in. It is compiled in only with the `live-capture` feature, off
   unless `FLOWSENTINEL_LIVE_CAPTURE=true`, admin-only, and needs an explicit authorization
   confirmation for each capture. Interfaces can be restricted with `FLOWSENTINEL_LIVE_INTERFACES`.

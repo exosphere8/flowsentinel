@@ -1,5 +1,11 @@
 //! Accounts, sessions, CSRF, roles, sign-in limits and the audit log,
 //! end to end against a real PostgreSQL server (see `storage::testing`).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::Path;
 

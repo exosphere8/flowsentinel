@@ -54,6 +54,16 @@ FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
   promiscuous mode off by default, and analyze it like an import. It is off unless enabled, needs
   only the `CAP_NET_RAW` capability (never root), and drops and counts packets rather than
   queueing them when the writer falls behind.
+- **Milestone 11, observability and hardening:** every request has an ID that appears in its
+  JSON log lines. A readiness probe checks the database. Optional Prometheus metrics and
+  OpenTelemetry traces never carry capture data. Further hardening:
+  - stricter response headers, and HSTS behind HTTPS;
+  - database TLS with certificate verification, and server-side timeouts;
+  - a lint that denies panicking shortcuts outside tests;
+  - dependency, license and secret scanning, and CodeQL, in CI.
+
+  Benchmarks and a load-test script measure throughput and latency (see
+  [docs/performance.md](docs/performance.md)).
 
 ## Quick start
 
@@ -245,6 +255,8 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_LIVE_CAPTURE` | `false` | Allow authorized live capture (needs a `live-capture` build; see [docs/live-capture.md](docs/live-capture.md)) |
 | `FLOWSENTINEL_LIVE_INTERFACES` | any | Interfaces live capture may use (comma-separated) |
 | `FLOWSENTINEL_LIVE_MAX_SECONDS` | 600 | Longest live capture |
+| `FLOWSENTINEL_METRICS_ADDR` | not set | Serve Prometheus metrics at `/metrics` on this address, without authentication (see [docs/observability.md](docs/observability.md)) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | Export traces with OpenTelemetry (builds with the `otel` feature) |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
 | `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
 
@@ -276,7 +288,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [ARCHITECTURE.md](AR
 ```
 crates/
   analysis/     Two-pass analysis pipeline (capture, decode, flows) with bounded memory
-  api-server/   Axum HTTP service: /health and the /api/v1 metadata API
+  api-server/   Axum HTTP service: /health, /ready and the /api/v1 metadata API; metrics, tracing
   capture/      Classic PCAP container reader with resource limits
   cli/          `flowsentinel` command-line tool
   decoder/      Bounds-checked protocol and application-metadata decoder
@@ -290,7 +302,7 @@ docs/           Design and user documentation
 fixtures/       Synthetic test inputs only (fixtures/pcap/ is generated)
 frontend/       React + TypeScript dashboard (Vite, Vitest, Playwright)
 fuzz/           cargo-fuzz targets (nightly; outside the main workspace)
-scripts/        Developer scripts, including the fixture generator
+scripts/        Developer scripts: the fixture generator and the API load test
 tests/          Notes on where the cross-crate and cross-service tests live
 ```
 
@@ -309,7 +321,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 8 | React dashboard | Done |
 | 9 | Authentication, RBAC and auditing | Done |
 | 10 | Authorized live capture | Done |
-| 11 | Observability, performance and hardening | Planned |
+| 11 | Observability, performance and hardening | Done |
 | 12 | Public release (v0.1.0) | Planned |
 
 ## License

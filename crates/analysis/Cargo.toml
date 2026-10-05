@@ -18,5 +18,9 @@ flow-engine.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[[bench]]
+name = "pipeline"
+harness = false
+
 [lints]
 workspace = true

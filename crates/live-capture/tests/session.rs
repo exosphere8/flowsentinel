@@ -1,5 +1,11 @@
 //! Capture sessions with replay sources: limits, stopping, backpressure,
 //! failures, and files that the offline reader reads back exactly.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::fs::File;
 use std::io::{self, BufReader, Write};

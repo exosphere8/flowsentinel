@@ -1,4 +1,10 @@
 //! Flow reconstruction scenarios built from synthetic packets.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::net::IpAddr;
 use std::time::Duration;

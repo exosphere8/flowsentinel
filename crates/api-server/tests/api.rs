@@ -1,5 +1,11 @@
 //! `/api/v1` end to end against a real PostgreSQL server (see
 //! `storage::testing` for how to enable these tests).
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::{Path, PathBuf};
 
@@ -1303,5 +1309,44 @@ async fn the_dashboard_is_served_with_security_headers() {
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     let (status, body, _) = get_raw(&h, Method::GET, "/assets/../../../../etc/passwd").await;
     assert!(!body.contains("root:"), "{status}");
+    h.finish().await;
+}
+
+#[tokio::test]
+async fn filtered_lists_wait_briefly_for_a_turn() {
+    let Some(h) = Harness::new("api_filter_wait", 1024 * 1024).await else {
+        return;
+    };
+    let id = h.upload_fixture("flows-mixed.pcap").await;
+    let uri = format!("/api/v1/captures/{id}/flows?filter={}", encode("udp"));
+    let slots = std::sync::Arc::clone(&h.state.filter_slots);
+    let all = u32::try_from(slots.available_permits()).unwrap();
+
+    // Every filter slot taken, freed after a moment: the request waits.
+    let held = std::sync::Arc::clone(&slots)
+        .acquire_many_owned(all)
+        .await
+        .unwrap();
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        drop(held);
+    });
+    let started = std::time::Instant::now();
+    let (status, body) = h.get(&uri).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(started.elapsed() >= std::time::Duration::from_millis(250));
+    release.await.unwrap();
+
+    // Taken for longer than the wait: 429, while unfiltered lists still work.
+    let held = std::sync::Arc::clone(&slots)
+        .acquire_many_owned(all)
+        .await
+        .unwrap();
+    let (status, body) = h.get(&uri).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(error_code(&body), "filter_busy");
+    let (status, _) = h.get(&format!("/api/v1/captures/{id}/flows")).await;
+    assert_eq!(status, StatusCode::OK);
+    drop(held);
     h.finish().await;
 }

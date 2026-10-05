@@ -11,6 +11,9 @@
 //! `FLOWSENTINEL_REQUIRE_DB_TESTS=1`, which turns a missing variable into a
 //! failure so the tests cannot be skipped silently.
 
+// Test support only: failing loudly (expect, panic) is the point.
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
@@ -85,6 +88,11 @@ impl TestDatabase {
             name,
             dropped: false,
         })
+    }
+
+    /// Options for connecting to this test database.
+    pub fn connect_options(&self) -> PgConnectOptions {
+        self.admin.clone().database(&self.name)
     }
 
     /// Drops the database. Call at the end of each test.
