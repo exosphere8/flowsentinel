@@ -1,5 +1,11 @@
 //! Property tests: arbitrary input never panics, errors point inside the
 //! input, and every accepted filter binds its values as parameters.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use filter_language::{
     FLOW_FIELDS, FieldType, FilterError, MAX_FILTER_BYTES, PACKET_FIELDS, Piece, Target, compile,

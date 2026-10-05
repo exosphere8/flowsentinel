@@ -12,6 +12,7 @@ main workspace, so stable builds and CI do not need a nightly toolchain.
 | `filter` | Arbitrary UTF-8 text | The display-filter lexer, parser, type checker and translator for packets and flows; error spans are whole characters inside the input; normalized filters reparse to the same SQL unless normalizing made them longer than the limit |
 | `flows` | A sequence of packets with time steps (forward, backward, missing, far future, far past) | The decoder plus a 4-flow `FlowEngine`: expiry, eviction, retention limits, accounting invariants and JSON serialization |
 | `detect` | The same packet sequences, with time steps of seconds | The decoder, a small flow table and every detection rule with low thresholds: alert numbering, citation and flow-link invariants, limits and JSON serialization |
+| `request_inputs` | Arbitrary bytes, as text | The API server's checks of untrusted request input: `Host` names and allow-lists, session cookies, usernames, new passwords, request IDs, live-capture filter text and admin password files. Nothing may panic, and accepted values must follow their documented rules |
 
 ```bash
 rustup toolchain install nightly

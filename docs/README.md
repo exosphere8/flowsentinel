@@ -18,6 +18,9 @@
 | [permissions.md](permissions.md) | Least-privilege capture permissions on Linux, Docker, macOS and Windows |
 | [dashboard.md](dashboard.md) | The web dashboard: pages, running it, security headers, privacy, accessibility, tests |
 | [data-retention.md](data-retention.md) | What is stored, what never is, retention settings and deletion |
+| [observability.md](observability.md) | Request IDs, logs, health and readiness, Prometheus metrics, OpenTelemetry |
+| [hardening.md](hardening.md) | Deployment checklist, response headers, database TLS, containers, supply-chain checks |
+| [performance.md](performance.md) | Benchmarks, load testing, measured throughput and latency |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 
 Each later milestone adds its own document here.

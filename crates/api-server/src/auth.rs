@@ -326,9 +326,9 @@ fn origin_authority(origin: &str) -> Option<&str> {
     (!rest.is_empty() && !rest.contains('/')).then_some(rest)
 }
 
-/// Middleware for every `/api/v1` route: refuses state-changing requests
+/// Route layer for every `/api/v1` route: refuses state-changing requests
 /// that a browser marks as coming from another site, in addition to the
-/// CSRF token and `SameSite` cookies.
+/// CSRF token and `SameSite` cookies. Unknown paths get `404` either way.
 pub async fn same_origin(request: Request, next: Next) -> Response {
     if is_state_changing(request.method()) {
         let headers = request.headers();
@@ -346,9 +346,13 @@ pub async fn same_origin(request: Request, next: Next) -> Response {
             _ => true,
         });
         if cross_site || foreign_origin {
+            // The route template, never the path: paths can hold IDs.
             tracing::warn!(
                 method = %request.method(),
-                path = request.uri().path(),
+                route = request
+                    .extensions()
+                    .get::<axum::extract::MatchedPath>()
+                    .map_or("", |m| m.as_str()),
                 "refused a cross-site state-changing request"
             );
             return ApiError::new(

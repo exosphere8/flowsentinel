@@ -69,9 +69,42 @@ async fn cache_assets(request: Request, next: Next) -> Response {
     response
 }
 
-/// Adds the security headers to every response that does not set them.
-pub fn with_security_headers(router: Router) -> Router {
-    let headers: [(HeaderName, &'static str); 5] = [
+/// `Cache-Control: no-store` on API and probe responses, errors included
+/// (also those refused before routing): they hold capture metadata or live
+/// state, so browsers and proxies must not keep them.
+async fn no_store(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let path = request.uri().path();
+    let api = path == "/api" || path.starts_with("/api/") || matches!(path, "/health" | "/ready");
+    let mut response = next.run(request).await;
+    if api {
+        response
+            .headers_mut()
+            .entry(header::CACHE_CONTROL)
+            .or_insert(HeaderValue::from_static("no-store"));
+    }
+    response
+}
+
+/// HSTS when the server is reached through HTTPS: one year, subdomains
+/// excluded (the server cannot know whether they all use HTTPS).
+pub const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000";
+
+/// Adds the security headers to every response that does not set them;
+/// with `https` (secure cookies, so HTTPS in front), also HSTS.
+pub fn with_security_headers(router: Router, https: bool) -> Router {
+    let router = router.layer(axum::middleware::from_fn(no_store));
+    let router = if https {
+        router.layer(SetResponseHeaderLayer::if_not_present(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static(STRICT_TRANSPORT_SECURITY),
+        ))
+    } else {
+        router
+    };
+    let headers: [(HeaderName, &'static str); 7] = [
         (header::CONTENT_SECURITY_POLICY, CONTENT_SECURITY_POLICY),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         (header::X_FRAME_OPTIONS, "DENY"),
@@ -79,6 +112,14 @@ pub fn with_security_headers(router: Router) -> Router {
         (
             HeaderName::from_static("cross-origin-opener-policy"),
             "same-origin",
+        ),
+        (
+            HeaderName::from_static("cross-origin-resource-policy"),
+            "same-origin",
+        ),
+        (
+            HeaderName::from_static("permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
         ),
     ];
     headers.into_iter().fold(router, |router, (name, value)| {

@@ -138,6 +138,7 @@ All paths are under `/api/v1`. IDs are integers.
 | `GET /audit` | The audit log (admin) |
 | `GET /live/interfaces`, `POST /live/captures`, `GET /live/captures/current`, `POST /live/captures/current/stop` | Authorized live capture (admin; see [live-capture.md](live-capture.md)) |
 | `GET /health` (no prefix) | Liveness: `{"status":"ok","service":"flowsentinel-api"}` |
+| `GET /ready` (no prefix) | Readiness: `200` when the database answers, otherwise `503` (see [observability.md](observability.md#health-and-readiness)) |
 | `GET /` and other paths outside `/api/v1` (no prefix) | The dashboard, when `FLOWSENTINEL_DASHBOARD_DIR` is set; otherwise `404` |
 
 Packets and events exist only for the stored packets of a capture. Flows and summaries always
@@ -232,8 +233,13 @@ in a message is cut at 200 characters.
   stored.
 - JSON request bodies are limited to 16 KiB; uploads to `FLOWSENTINEL_MAX_UPLOAD_MB`.
 - Every response, including errors and dashboard files, carries a Content Security Policy,
-  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and
-  `Cross-Origin-Opener-Policy: same-origin` (see [dashboard.md](dashboard.md#security)).
+  `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
+  `Cross-Origin-Opener-Policy` and `Cross-Origin-Resource-Policy: same-origin`, a
+  `Permissions-Policy` that turns off device APIs, and an `X-Request-Id`. With
+  `FLOWSENTINEL_SECURE_COOKIES=true` it also carries `Strict-Transport-Security`. API responses
+  are sent with `Cache-Control: no-store`. See [dashboard.md](dashboard.md#security) and
+  [observability.md](observability.md#request-ids).
+- The server sends no CORS headers, so browsers do not let other sites read API responses.
 - Concurrent imports are limited, and each import's work is bounded by the capture limits and
   the flow engine's limits: `FLOWSENTINEL_MAX_UPLOAD_MB`, `FLOWSENTINEL_MAX_PACKETS` (1,000,000)
   and `FLOWSENTINEL_MAX_ANALYSIS_SECONDS` (600) for the first pass. A larger capture is imported
@@ -242,8 +248,12 @@ in a message is cut at 200 characters.
 - Reads and settings changes share the database pool minus two connections per import slot
   (at least one), so heavy reading cannot starve imports. A request that waits more than 10
   seconds for a slot gets `503 server_busy`. Filtered packet and flow lists may use at most half
-  of these slots at once (more get `429 filter_busy`) and run under
-  `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS`.
+  of these slots at once; more wait up to 5 seconds for a turn, without holding a slot, and then
+  get `429 filter_busy`. They run under `FLOWSENTINEL_QUERY_TIMEOUT_SECONDS`.
+- PostgreSQL ends any statement running longer than five minutes and any transaction left idle
+  for five minutes, so a stuck request cannot hold locks. Connections are named
+  `flowsentinel-api` in `pg_stat_activity`. TLS to the database follows the URL's `sslmode`; see
+  [hardening.md](hardening.md#database).
 
 ### Host names
 

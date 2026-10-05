@@ -2,6 +2,12 @@
 //! The dashboard generates its API types from that file.
 //!
 //! Regenerate it with `FLOWSENTINEL_UPDATE_OPENAPI=1 cargo test -p api-server --test openapi`.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::Path;
 

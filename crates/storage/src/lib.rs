@@ -14,7 +14,7 @@ pub mod testing;
 
 use std::time::Duration;
 
-use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
 use sqlx::{Postgres, QueryBuilder, Row, Transaction};
 
 pub use accounts::{
@@ -402,11 +402,31 @@ fn push_condition(builder: &mut QueryBuilder<'_, Postgres>, condition: Option<&d
 
 impl Storage {
     /// Connects with a bounded pool and a connect timeout.
+    ///
+    /// Every connection is named `flowsentinel-api` (visible in
+    /// `pg_stat_activity`), and PostgreSQL ends any statement running longer
+    /// than five minutes and any transaction left idle for five minutes, so a
+    /// stuck client cannot hold locks or connections. TLS follows the URL's
+    /// `sslmode` (for example `?sslmode=verify-full`), verified against the
+    /// system's certificate store or `sslrootcert`.
     pub async fn connect(database_url: &str, max_connections: u32) -> Result<Self, StorageError> {
+        let options: PgConnectOptions = database_url.parse().map_err(StorageError::Connection)?;
+        Self::connect_with(options, max_connections).await
+    }
+
+    /// [`connect`](Self::connect) with parsed options.
+    pub async fn connect_with(
+        options: PgConnectOptions,
+        max_connections: u32,
+    ) -> Result<Self, StorageError> {
+        let options = options.application_name("flowsentinel-api").options([
+            ("statement_timeout", "300s"),
+            ("idle_in_transaction_session_timeout", "300s"),
+        ]);
         let pool = PgPoolOptions::new()
             .max_connections(max_connections.max(1))
             .acquire_timeout(Duration::from_secs(10))
-            .connect(database_url)
+            .connect_with(options)
             .await
             .map_err(StorageError::Connection)?;
         Ok(Self::from_pool(pool))
@@ -452,10 +472,26 @@ impl Storage {
     /// Applies pending migrations. Already-applied migrations are verified
     /// against their checksums.
     pub async fn migrate(&self) -> Result<(), StorageError> {
-        MIGRATOR
-            .run(&self.pool)
+        let mut conn = self.pool.acquire().await?;
+        // A migration may take longer than the statement limit every
+        // connection gets (see `connect`).
+        sqlx::query("SET statement_timeout = 0")
+            .execute(&mut *conn)
+            .await?;
+        let result = MIGRATOR
+            .run(&mut *conn)
             .await
-            .map_err(StorageError::Migration)
+            .map_err(StorageError::Migration);
+        // Back to the connection's own limit before it returns to the pool;
+        // if that fails, the connection is closed instead.
+        if sqlx::query("RESET statement_timeout")
+            .execute(&mut *conn)
+            .await
+            .is_err()
+        {
+            conn.close_on_drop();
+        }
+        result
     }
 
     /// Round-trips a trivial query.
@@ -904,9 +940,16 @@ impl Storage {
     /// Deletes sessions whose retention period has passed, with everything
     /// stored for them. Returns how many sessions were deleted.
     pub async fn purge_expired(&self) -> Result<u64, StorageError> {
-        let result = sqlx::query("DELETE FROM capture_sessions WHERE expires_at <= now()")
-            .execute(&self.pool)
+        let mut tx = self.pool.begin().await?;
+        // A large backlog may take longer than the statement limit every
+        // connection gets; it would otherwise be rolled back every hour.
+        sqlx::query("SET LOCAL statement_timeout = 0")
+            .execute(&mut *tx)
             .await?;
+        let result = sqlx::query("DELETE FROM capture_sessions WHERE expires_at <= now()")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 }

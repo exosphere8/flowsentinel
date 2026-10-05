@@ -14,7 +14,6 @@ use detection_engine::DetectionConfig;
 use flow_engine::FlowConfig;
 use storage::Storage;
 use tokio::net::TcpListener;
-use tracing_subscriber::EnvFilter;
 
 /// How often expired captures are deleted.
 const PURGE_INTERVAL: Duration = Duration::from_secs(3600);
@@ -36,8 +35,22 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     }
-    init_tracing();
+    let telemetry = match api_server::telemetry::init(|key| std::env::var(key).ok()) {
+        Ok(telemetry) => telemetry,
+        Err(err) => {
+            eprintln!("error: cannot set up tracing: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if telemetry.exporting() {
+        tracing::info!("exporting traces with OpenTelemetry");
+    }
+    let code = run().await;
+    telemetry.shutdown();
+    code
+}
 
+async fn run() -> ExitCode {
     let config = match Config::from_env() {
         Ok(config) => config,
         Err(err) => {
@@ -54,10 +67,11 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     let upload_dir = config.upload_dir.clone().unwrap_or_else(std::env::temp_dir);
-    if !upload_dir.is_dir() {
+    if let Err(err) = upload::check_directory(&upload_dir) {
         tracing::error!(
             path = %upload_dir.display(),
-            "invalid configuration: FLOWSENTINEL_UPLOAD_DIR is not a directory"
+            error = %err,
+            "invalid configuration: FLOWSENTINEL_UPLOAD_DIR"
         );
         return ExitCode::FAILURE;
     }
@@ -166,6 +180,12 @@ async fn main() -> ExitCode {
         config.max_concurrent_imports,
     );
 
+    if let Some(addr) = config.metrics_addr {
+        if let Err(code) = serve_metrics(addr, &state, config.max_concurrent_imports).await {
+            return code;
+        }
+    }
+
     let listener = match TcpListener::bind(config.addr).await {
         Ok(listener) => listener,
         Err(err) => {
@@ -209,6 +229,57 @@ async fn main() -> ExitCode {
 
     tracing::info!("flowsentinel-api stopped");
     ExitCode::SUCCESS
+}
+
+/// Serves `GET /metrics` on its own listener, so it can be reachable by a
+/// metrics collector without exposing the API, or the reverse.
+async fn serve_metrics(
+    addr: SocketAddr,
+    state: &AppState,
+    max_imports: usize,
+) -> Result<(), ExitCode> {
+    let listener = TcpListener::bind(addr).await.map_err(|err| {
+        tracing::error!(addr = %addr, error = %err, "failed to bind the metrics listener");
+        ExitCode::FAILURE
+    })?;
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            addr = %addr,
+            "metrics are served without authentication on a non-loopback address; \
+             restrict who can reach it"
+        );
+    }
+    let pool = state.storage.pool().clone();
+    let imports = std::sync::Arc::clone(&state.import_slots);
+    let gauges: api_server::observability::GaugeSource = std::sync::Arc::new(move || {
+        let in_progress = max_imports.saturating_sub(imports.available_permits());
+        vec![
+            (
+                "flowsentinel_db_connections",
+                "Open database connections.",
+                f64::from(pool.size()),
+            ),
+            (
+                "flowsentinel_db_idle_connections",
+                "Idle database connections.",
+                pool.num_idle() as f64,
+            ),
+            (
+                "flowsentinel_imports_in_progress",
+                "Imports and live captures holding an import slot.",
+                in_progress as f64,
+            ),
+        ]
+    });
+    let router =
+        api_server::observability::metrics_router(std::sync::Arc::clone(&state.metrics), gauges);
+    tracing::info!(addr = %addr, "serving metrics at /metrics");
+    tokio::spawn(async move {
+        if let Err(err) = axum::serve(listener, router).await {
+            tracing::error!(error = %err, "metrics listener failed");
+        }
+    });
+    Ok(())
 }
 
 /// Probes `GET /health` on the configured address; exit code 0 when the
@@ -347,17 +418,6 @@ async fn run_create_user(args: &[String]) -> ExitCode {
             ExitCode::FAILURE
         }
     }
-}
-
-/// Structured JSON logs to stdout. Verbosity comes from `RUST_LOG`
-/// (default `info`).
-fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(filter)
-        .with_current_span(false)
-        .init();
 }
 
 /// Resolves on Ctrl+C, or SIGTERM on Unix, so in-flight requests can finish.

@@ -1,5 +1,11 @@
 //! Live capture through the API with replay sources (no network access or
 //! privileges needed), against a real PostgreSQL server.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

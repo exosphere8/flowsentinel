@@ -385,24 +385,28 @@ fn compile_filter(text: Option<&str>, target: Target) -> Result<Option<CompiledF
     }
 }
 
-/// A permit to run a filtered list query, or `429` when too many run.
-fn filter_permit(
+/// How long a filtered list waits for a filter slot before `429`.
+const FILTER_SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A permit to run a filtered list query. Waits up to [`FILTER_SLOT_WAIT`]
+/// for one, then answers `429`. Taken before the read slot, so filtered
+/// requests waiting their turn hold no database slot.
+async fn filter_permit(
     state: &AppState,
     filter: Option<&CompiledFilter>,
 ) -> Result<Option<tokio::sync::OwnedSemaphorePermit>, ApiError> {
     if filter.is_none() {
         return Ok(None);
     }
-    Arc::clone(&state.filter_slots)
-        .try_acquire_owned()
-        .map(Some)
-        .map_err(|_| {
-            ApiError::new(
-                StatusCode::TOO_MANY_REQUESTS,
-                "filter_busy",
-                "too many filtered queries are running; try again shortly",
-            )
-        })
+    let acquire = Arc::clone(&state.filter_slots).acquire_owned();
+    match tokio::time::timeout(FILTER_SLOT_WAIT, acquire).await {
+        Ok(Ok(permit)) => Ok(Some(permit)),
+        _ => Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "filter_busy",
+            "too many filtered queries are running; try again shortly",
+        )),
+    }
 }
 
 /// Maps a capture error for an upload. The temporary file's random name is
@@ -808,15 +812,15 @@ pub async fn list_packets(
     ApiPath(id): ApiPath<i64>,
     ApiQuery(params): ApiQuery<PacketListParams>,
 ) -> Result<Json<Paged<PacketSummary>>, ApiError> {
-    let _slot = state.read_slot().await?;
     let page = page_of(params.page, params.per_page)?;
     let sort = packet_sort(params.sort.as_deref())?;
     let conditions = Conditions {
         flow_id: params.flow_id,
         filter: compile_filter(params.filter.as_deref(), Target::Packets)?,
     };
+    let _permit = filter_permit(&state, conditions.filter.as_ref()).await?;
+    let _slot = state.read_slot().await?;
     require_session(&state, id).await?;
-    let _permit = filter_permit(&state, conditions.filter.as_ref())?;
     Ok(Json(
         state
             .storage
@@ -871,15 +875,15 @@ pub async fn list_flows(
     ApiPath(id): ApiPath<i64>,
     ApiQuery(params): ApiQuery<FlowListParams>,
 ) -> Result<Json<Paged<FlowSummaryRow>>, ApiError> {
-    let _slot = state.read_slot().await?;
     let page = page_of(params.page, params.per_page)?;
     let sort = flow_sort(params.sort.as_deref())?;
     let conditions = Conditions {
         flow_id: None,
         filter: compile_filter(params.filter.as_deref(), Target::Flows)?,
     };
+    let _permit = filter_permit(&state, conditions.filter.as_ref()).await?;
+    let _slot = state.read_slot().await?;
     require_session(&state, id).await?;
-    let _permit = filter_permit(&state, conditions.filter.as_ref())?;
     Ok(Json(
         state
             .storage

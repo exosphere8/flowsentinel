@@ -40,8 +40,25 @@ jobs:
       - name: Build
         run: cargo build --workspace --locked
 
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # RustSec advisories, licenses, banned and duplicate crates, sources
+      # (deny.toml).
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: npm audit (high and critical)
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
   live:
-    name: Live capture (libpcap)
+    name: Live capture (libpcap) and OpenTelemetry
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -55,6 +72,10 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked --features api-server/live-capture -- -D warnings
       - name: Test with libpcap
         run: cargo test --workspace --locked --features api-server/live-capture
+      - name: Clippy and test with OpenTelemetry
+        run: |
+          cargo clippy -p api-server --all-targets --locked --features otel -- -D warnings
+          cargo test -p api-server --locked --features otel --test otel
       - name: Capture loopback traffic with CAP_NET_RAW only, as an unprivileged user
         run: |
           bin=$(cargo test --locked -p live-capture --features libpcap --test session --no-run \
@@ -74,6 +95,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace --all-targets --locked
+      - name: Check with OpenTelemetry
+        run: cargo check -p api-server --all-targets --locked --features otel
 
   database:
     name: Database tests (PostgreSQL)

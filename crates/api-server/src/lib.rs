@@ -15,10 +15,12 @@ pub mod extract;
 pub mod healthcheck;
 pub mod host;
 pub mod live;
+pub mod observability;
 pub mod openapi;
 pub mod ratelimit;
 pub mod routes;
 pub mod state;
+pub mod telemetry;
 pub mod upload;
 
 use std::fmt;
@@ -28,6 +30,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
@@ -72,6 +75,8 @@ pub const ADMIN_USERNAME_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_USERNAME";
 /// File holding the first admin's password; used only while no account
 /// exists.
 pub const ADMIN_PASSWORD_FILE_ENV_VAR: &str = "FLOWSENTINEL_ADMIN_PASSWORD_FILE";
+/// Address for the Prometheus metrics listener (off when unset).
+pub const METRICS_ADDR_ENV_VAR: &str = "FLOWSENTINEL_METRICS_ADDR";
 /// `true` to allow live capture (off by default).
 pub const LIVE_CAPTURE_ENV_VAR: &str = "FLOWSENTINEL_LIVE_CAPTURE";
 /// Comma-separated interfaces live capture may use (default: any).
@@ -121,6 +126,7 @@ pub fn app() -> Router {
             .route("/health", get(health))
             .fallback(error::not_found)
             .method_not_allowed_fallback(error::method_not_allowed),
+        false,
     )
 }
 
@@ -187,15 +193,19 @@ pub fn app_with_state(state: AppState) -> Router {
         ));
     let api = public
         .merge(protected)
+        .route_layer(middleware::from_fn(auth::same_origin))
+        // Outermost route layer, so refused requests keep their route label.
+        .route_layer(middleware::from_fn(observability::mark_route))
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)
         // Uploads stream their raw body under their own limit; this caps
         // everything read through the JSON extractor.
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
-        .layer(middleware::from_fn(auth::same_origin))
-        .with_state(state);
+        .with_state(state.clone());
+    let probe = Arc::new(ReadyProbe::new(state.storage.clone()));
     let router = Router::new()
         .route("/health", get(health))
+        .route("/ready", get(move || ready(Arc::clone(&probe))))
         .nest("/api/v1", api);
     let router = match dashboard_dir {
         Some(dir) => router.fallback_service(dashboard::router(&dir)),
@@ -205,7 +215,78 @@ pub fn app_with_state(state: AppState) -> Router {
         router
             .method_not_allowed_fallback(error::method_not_allowed)
             .layer(middleware::from_fn_with_state(policy, host::guard)),
+        state.config.auth.secure_cookies,
     )
+    .layer(middleware::from_fn_with_state(
+        Arc::clone(&state.metrics),
+        observability::observe,
+    ))
+}
+
+/// Body of `GET /ready`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ReadyResponse {
+    pub status: &'static str,
+    pub database: &'static str,
+}
+
+/// How long a database check answers `/ready`.
+const READY_CACHE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Checks the database for `/ready` at most once per [`READY_CACHE`]:
+/// concurrent probes wait for one check and share its answer, so a flood of
+/// unauthenticated probes cannot take connections from real requests.
+#[derive(Debug)]
+pub struct ReadyProbe {
+    storage: storage::Storage,
+    last: tokio::sync::Mutex<Option<(std::time::Instant, bool)>>,
+}
+
+impl ReadyProbe {
+    pub fn new(storage: storage::Storage) -> Self {
+        Self {
+            storage,
+            last: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn reachable(&self) -> bool {
+        let mut last = self.last.lock().await;
+        if let Some((at, reachable)) = *last {
+            if at.elapsed() < READY_CACHE {
+                return reachable;
+            }
+        }
+        let reachable = matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), self.storage.ping()).await,
+            Ok(Ok(()))
+        );
+        *last = Some((std::time::Instant::now(), reachable));
+        reachable
+    }
+}
+
+/// Readiness: whether the server can answer API requests now, which needs
+/// the database. Probed by load balancers and orchestrators; it is answered
+/// for any `Host` and reveals only these two words.
+pub async fn ready(probe: Arc<ReadyProbe>) -> (StatusCode, Json<ReadyResponse>) {
+    if probe.reachable().await {
+        (
+            StatusCode::OK,
+            Json(ReadyResponse {
+                status: "ready",
+                database: "ok",
+            }),
+        )
+    } else {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ReadyResponse {
+                status: "not_ready",
+                database: "unavailable",
+            }),
+        )
+    }
 }
 
 async fn openapi_json() -> Json<utoipa::openapi::OpenApi> {
@@ -241,6 +322,8 @@ pub struct Config {
     pub live_capture: bool,
     pub live_interfaces: Option<Vec<String>>,
     pub live_max_seconds: u64,
+    /// Serve `/metrics` on this address (default: no metrics listener).
+    pub metrics_addr: Option<SocketAddr>,
 }
 
 impl Config {
@@ -284,6 +367,7 @@ impl fmt::Debug for Config {
             .field("live_capture", &self.live_capture)
             .field("live_interfaces", &self.live_interfaces)
             .field("live_max_seconds", &self.live_max_seconds)
+            .field("metrics_addr", &self.metrics_addr)
             .finish()
     }
 }
@@ -311,6 +395,10 @@ pub enum ConfigError {
         "invalid FLOWSENTINEL_ALLOWED_HOSTS value {value:?}: expected comma-separated host names or addresses, or *"
     )]
     InvalidAllowedHosts { value: String },
+    #[error(
+        "invalid FLOWSENTINEL_METRICS_ADDR value {value:?}: expected IP:PORT, for example 127.0.0.1:9464"
+    )]
+    InvalidMetricsAddr { value: String },
     #[error(
         "invalid FLOWSENTINEL_LIVE_INTERFACES value {value:?}: expected comma-separated interface names"
     )]
@@ -343,6 +431,7 @@ impl Default for Config {
             live_capture: false,
             live_interfaces: None,
             live_max_seconds: DEFAULT_LIVE_MAX_SECONDS,
+            metrics_addr: None,
         }
     }
 }
@@ -494,6 +583,14 @@ impl Config {
             3_650,
         )?;
         let secure_cookies = boolean(&lookup, SECURE_COOKIES_ENV_VAR)?;
+        let metrics_addr = match lookup(METRICS_ADDR_ENV_VAR) {
+            Some(raw) if !raw.trim().is_empty() => Some(
+                raw.trim()
+                    .parse()
+                    .map_err(|_| ConfigError::InvalidMetricsAddr { value: raw })?,
+            ),
+            _ => None,
+        };
         let live_capture = boolean(&lookup, LIVE_CAPTURE_ENV_VAR)?;
         let live_max_seconds = number(
             &lookup,
@@ -551,6 +648,7 @@ impl Config {
             live_capture,
             live_interfaces,
             live_max_seconds,
+            metrics_addr,
         })
     }
 }
@@ -630,6 +728,7 @@ mod tests {
             (LIVE_CAPTURE_ENV_VAR, "on"),
             (LIVE_MAX_SECONDS_ENV_VAR, "3601"),
             (LIVE_INTERFACES_ENV_VAR, " , "),
+            (METRICS_ADDR_ENV_VAR, "localhost:9464"),
         ] {
             let err = Config::from_lookup(lookup_with(&[(variable, bad)])).unwrap_err();
             assert!(err.to_string().contains(variable), "{err}");

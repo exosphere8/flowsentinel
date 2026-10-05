@@ -1,5 +1,11 @@
 //! Storage against a real PostgreSQL server. Each test creates and drops its
 //! own database; see `storage::testing` for how to enable them.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::{Path, PathBuf};
 
@@ -526,5 +532,33 @@ async fn alerts_are_stored_with_flow_links_and_triage() {
         .await
         .unwrap();
     assert_eq!(count, 0);
+    db.drop_database().await;
+}
+
+#[tokio::test]
+async fn server_connections_are_named_and_time_limited() {
+    let Some(db) = TestDatabase::create("conn_settings").await else {
+        return;
+    };
+    let storage = Storage::connect_with(db.connect_options(), 1)
+        .await
+        .unwrap();
+    // Maintenance lifts the limit for itself only: the pool's one
+    // connection has it again afterwards.
+    storage.migrate().await.unwrap();
+    storage.purge_expired().await.unwrap();
+    let show = |name: &'static str| {
+        let pool = storage.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, String>(&format!("SHOW {name}"))
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(show("statement_timeout").await, "5min");
+    assert_eq!(show("idle_in_transaction_session_timeout").await, "5min");
+    assert_eq!(show("application_name").await, "flowsentinel-api");
+    storage.pool().close().await;
     db.drop_database().await;
 }

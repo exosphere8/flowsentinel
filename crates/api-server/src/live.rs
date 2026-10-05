@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use live_capture::limits::{self, LiveLimits};
 use live_capture::{OpenRequest, Running, SourceError, SourceFactory, bpf, session};
@@ -18,12 +18,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use storage::{AuditOutcome, CaptureSource, NewAuditEvent};
 use tokio::sync::Mutex;
+use tracing::Instrument;
 use utoipa::ToSchema;
 
 use crate::audit;
 use crate::auth::{Admin, Authorized, ClientIp, CurrentUser};
 use crate::error::{ApiError, ErrorBody, ErrorResponse};
 use crate::extract::ApiJson;
+use crate::observability::RequestId;
 use crate::routes::{store_file, upload_file_name};
 use crate::state::AppState;
 use crate::upload::UPLOAD_PREFIX;
@@ -307,11 +309,13 @@ pub async fn status(State(state): State<AppState>, _admin: Authorized<Admin>) ->
 pub async fn start(
     State(state): State<AppState>,
     ClientIp(client_ip): ClientIp,
+    request_id: Option<Extension<RequestId>>,
     admin: Authorized<Admin>,
     ApiJson(request): ApiJson<LiveStart>,
 ) -> Result<(StatusCode, Json<LiveStatus>), ApiError> {
     let interface: String = request.interface.chars().take(64).collect();
-    match begin(&state, client_ip, admin.user(), request).await {
+    let request_id = request_id.map(|Extension(RequestId(id))| id);
+    match begin(&state, client_ip, request_id, admin.user(), request).await {
         Ok(status) => Ok((StatusCode::ACCEPTED, Json(status))),
         Err(err) => {
             // Refused attempts are audited too, for example an interface
@@ -344,6 +348,7 @@ pub async fn start(
 async fn begin(
     state: &AppState,
     client_ip: Option<std::net::IpAddr>,
+    request_id: Option<String>,
     user: &CurrentUser,
     request: LiveStart,
 ) -> Result<LiveStatus, ApiError> {
@@ -437,15 +442,26 @@ async fn begin(
     current.started = Some(Instant::now());
     current.running = Some(running);
     // Spawned before anything else is awaited: from here on the capture
-    // finishes and is imported whatever happens to this request.
-    tokio::spawn(finish_when_done(
-        state.clone(),
-        user.clone(),
-        client_ip,
-        file,
-        Arc::new(permit),
-        request.interface.clone(),
-    ));
+    // finishes and is imported whatever happens to this request. Its log
+    // lines carry the starting request's ID in their own span, which
+    // follows from the request's span without keeping it open.
+    let capture_span = tracing::error_span!(
+        parent: None,
+        "live_capture",
+        request_id = request_id.as_deref().unwrap_or(""),
+    );
+    capture_span.follows_from(tracing::Span::current());
+    tokio::spawn(
+        finish_when_done(
+            state.clone(),
+            user.clone(),
+            client_ip,
+            file,
+            Arc::new(permit),
+            request.interface.clone(),
+        )
+        .instrument(capture_span),
+    );
     drop(current);
     tracing::info!(
         interface = %request.interface,
@@ -464,7 +480,7 @@ async fn begin(
         ..audit::by(user, "live.start")
     };
     let audit_state = state.clone();
-    tokio::spawn(async move { audit::record(&audit_state, started).await });
+    tokio::spawn(async move { audit::record(&audit_state, started).await }.in_current_span());
     Ok(state.live.status().await)
 }
 

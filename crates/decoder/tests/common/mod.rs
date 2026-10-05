@@ -1,6 +1,11 @@
 //! Byte-level builders for synthetic test packets. Addresses are from
 //! documentation ranges (RFC 5737, RFC 3849) and locally administered MACs.
-
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 #![allow(dead_code)]
 
 pub const MAC_A: [u8; 6] = [0x02, 0, 0, 0, 0, 0x01];

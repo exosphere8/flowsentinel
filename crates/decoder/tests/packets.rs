@@ -1,4 +1,10 @@
 //! Decodes synthetic packets built byte by byte and checks every layer.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 mod common;
 

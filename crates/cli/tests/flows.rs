@@ -1,4 +1,10 @@
 //! Runs `flowsentinel flows` end to end against the fixtures in fixtures/pcap.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use std::path::PathBuf;
 use std::process::{Command, Output};

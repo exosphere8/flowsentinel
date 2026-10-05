@@ -116,6 +116,12 @@ The Vite development server reloads on every change and forwards `/api` and `/he
 | `X-Frame-Options` | `DENY` |
 | `Referrer-Policy` | `no-referrer` |
 | `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Cross-Origin-Resource-Policy` | `same-origin` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
+| `Strict-Transport-Security` | `max-age=31536000`, only with `FLOWSENTINEL_SECURE_COOKIES=true` (served through HTTPS) |
+
+API responses also carry `Cache-Control: no-store`, and every response carries an
+`X-Request-Id` ([observability.md](observability.md#request-ids)).
 
 The policy allows no inline scripts or styles and no third-party origins; the build loads no
 fonts, scripts or images from the internet. The end-to-end test fails on any CSP violation.

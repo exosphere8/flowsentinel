@@ -336,7 +336,11 @@ fn beaconing(flows: &[&FlowRecord], config: &DetectionConfig) -> Vec<Alert> {
             .filter_map(|f| start_ns(f))
             .map(|ns| ns as f64 / 1e9)
             .collect();
-        let intervals: Vec<f64> = starts.windows(2).map(|w| (w[1] - w[0]).max(0.0)).collect();
+        let intervals: Vec<f64> = starts
+            .iter()
+            .zip(starts.iter().skip(1))
+            .map(|(earlier, later)| (later - earlier).max(0.0))
+            .collect();
         let Some((mean, stddev)) = mean_stddev(&intervals) else {
             continue;
         };
