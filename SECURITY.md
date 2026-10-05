@@ -92,14 +92,15 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   minutes, and database connections can use TLS with certificate verification
   (`sslmode=verify-full`).
 - Logs, metrics and traces never contain request bodies, query strings (which can hold display
-  filters), credentials or packet data; they record route templates. The optional metrics
+  filters), credentials or packet data. Access logs, metrics and traces name requests by route
+  template, never by path. Traces carry only request spans and access events. The optional metrics
   listener has no authentication and is off by default. Details:
   [docs/observability.md](docs/observability.md).
 - Supply chain: CI checks Rust dependencies against the RustSec advisory database, licenses and
-  sources (`cargo-deny`, `deny.toml`), runs `npm audit` for the dashboard, scans the whole Git
-  history for secrets (gitleaks), and runs CodeQL on the dashboard and the workflows. Fuzz targets
-  cover the packet parsers, the filter language and the API's request-input checks. Deployment
-  checklist: [docs/hardening.md](docs/hardening.md).
+  sources (`cargo-deny`, `deny.toml`), and runs `npm audit` for the dashboard. It scans new
+  commits, and weekly the whole Git history, for secrets (gitleaks), and runs CodeQL on the
+  dashboard and the workflows. Fuzz targets cover the packet parsers, the filter language and the
+  API's request-input checks. Deployment checklist: [docs/hardening.md](docs/hardening.md).
 - Live capture is passive and opt-in. It is compiled in only with the `live-capture` feature, off
   unless `FLOWSENTINEL_LIVE_CAPTURE=true`, admin-only, and needs an explicit authorization
   confirmation for each capture. Interfaces can be restricted with `FLOWSENTINEL_LIVE_INTERFACES`.

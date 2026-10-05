@@ -472,10 +472,26 @@ impl Storage {
     /// Applies pending migrations. Already-applied migrations are verified
     /// against their checksums.
     pub async fn migrate(&self) -> Result<(), StorageError> {
-        MIGRATOR
-            .run(&self.pool)
+        let mut conn = self.pool.acquire().await?;
+        // A migration may take longer than the statement limit every
+        // connection gets (see `connect`).
+        sqlx::query("SET statement_timeout = 0")
+            .execute(&mut *conn)
+            .await?;
+        let result = MIGRATOR
+            .run(&mut *conn)
             .await
-            .map_err(StorageError::Migration)
+            .map_err(StorageError::Migration);
+        // Back to the connection's own limit before it returns to the pool;
+        // if that fails, the connection is closed instead.
+        if sqlx::query("RESET statement_timeout")
+            .execute(&mut *conn)
+            .await
+            .is_err()
+        {
+            conn.close_on_drop();
+        }
+        result
     }
 
     /// Round-trips a trivial query.
@@ -924,9 +940,16 @@ impl Storage {
     /// Deletes sessions whose retention period has passed, with everything
     /// stored for them. Returns how many sessions were deleted.
     pub async fn purge_expired(&self) -> Result<u64, StorageError> {
-        let result = sqlx::query("DELETE FROM capture_sessions WHERE expires_at <= now()")
-            .execute(&self.pool)
+        let mut tx = self.pool.begin().await?;
+        // A large backlog may take longer than the statement limit every
+        // connection gets; it would otherwise be rolled back every hour.
+        sqlx::query("SET LOCAL statement_timeout = 0")
+            .execute(&mut *tx)
             .await?;
+        let result = sqlx::query("DELETE FROM capture_sessions WHERE expires_at <= now()")
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(result.rows_affected())
     }
 }

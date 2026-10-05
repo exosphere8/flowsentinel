@@ -57,18 +57,6 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=high
 
-  secrets:
-    name: Secret scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-      # Scans the whole history for credentials and keys.
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   live:
     name: Live capture (libpcap) and OpenTelemetry
     runs-on: ubuntu-latest
@@ -107,6 +95,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace --all-targets --locked
+      - name: Check with OpenTelemetry
+        run: cargo check -p api-server --all-targets --locked --features otel
 
   database:
     name: Database tests (PostgreSQL)

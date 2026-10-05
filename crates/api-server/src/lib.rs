@@ -30,12 +30,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::DefaultBodyLimit;
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use serde::Serialize;
-use tower_http::set_header::SetResponseHeaderLayer;
 use utoipa::OpenApi;
 
 pub use state::{ApiConfig, AppState};
@@ -194,23 +193,19 @@ pub fn app_with_state(state: AppState) -> Router {
         ));
     let api = public
         .merge(protected)
+        .route_layer(middleware::from_fn(auth::same_origin))
+        // Outermost route layer, so refused requests keep their route label.
         .route_layer(middleware::from_fn(observability::mark_route))
         .fallback(error::not_found)
         .method_not_allowed_fallback(error::method_not_allowed)
         // Uploads stream their raw body under their own limit; this caps
         // everything read through the JSON extractor.
         .layer(DefaultBodyLimit::max(MAX_JSON_BODY_BYTES))
-        .layer(middleware::from_fn(auth::same_origin))
-        // API responses hold capture metadata: never cached.
-        .layer(SetResponseHeaderLayer::if_not_present(
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("no-store"),
-        ))
         .with_state(state.clone());
-    let storage = state.storage.clone();
+    let probe = Arc::new(ReadyProbe::new(state.storage.clone()));
     let router = Router::new()
         .route("/health", get(health))
-        .route("/ready", get(move || ready(storage.clone())))
+        .route("/ready", get(move || ready(Arc::clone(&probe))))
         .nest("/api/v1", api);
     let router = match dashboard_dir {
         Some(dir) => router.fallback_service(dashboard::router(&dir)),
@@ -235,15 +230,47 @@ pub struct ReadyResponse {
     pub database: &'static str,
 }
 
+/// How long a database check answers `/ready`.
+const READY_CACHE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Checks the database for `/ready` at most once per [`READY_CACHE`]:
+/// concurrent probes wait for one check and share its answer, so a flood of
+/// unauthenticated probes cannot take connections from real requests.
+#[derive(Debug)]
+pub struct ReadyProbe {
+    storage: storage::Storage,
+    last: tokio::sync::Mutex<Option<(std::time::Instant, bool)>>,
+}
+
+impl ReadyProbe {
+    pub fn new(storage: storage::Storage) -> Self {
+        Self {
+            storage,
+            last: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    async fn reachable(&self) -> bool {
+        let mut last = self.last.lock().await;
+        if let Some((at, reachable)) = *last {
+            if at.elapsed() < READY_CACHE {
+                return reachable;
+            }
+        }
+        let reachable = matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), self.storage.ping()).await,
+            Ok(Ok(()))
+        );
+        *last = Some((std::time::Instant::now(), reachable));
+        reachable
+    }
+}
+
 /// Readiness: whether the server can answer API requests now, which needs
 /// the database. Probed by load balancers and orchestrators; it is answered
 /// for any `Host` and reveals only these two words.
-pub async fn ready(storage: storage::Storage) -> (StatusCode, Json<ReadyResponse>) {
-    let reachable = matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(2), storage.ping()).await,
-        Ok(Ok(()))
-    );
-    if reachable {
+pub async fn ready(probe: Arc<ReadyProbe>) -> (StatusCode, Json<ReadyResponse>) {
+    if probe.reachable().await {
         (
             StatusCode::OK,
             Json(ReadyResponse {

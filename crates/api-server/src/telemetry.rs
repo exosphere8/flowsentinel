@@ -5,11 +5,12 @@
 //! with its `request_id` (see [`crate::observability`]).
 //!
 //! With the `otel` feature, spans are also exported with OpenTelemetry
-//! (OTLP over HTTP/protobuf) when `OTEL_EXPORTER_OTLP_ENDPOINT` or
-//! `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set; the exporter reads the
-//! standard `OTEL_*` variables. Spans carry route templates, methods,
-//! statuses and request IDs, never request bodies, query strings or packet
-//! data.
+//! (OTLP over HTTP/protobuf, plain or HTTPS) when
+//! `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is
+//! set; the exporter reads the standard `OTEL_*` variables. Only the
+//! `request` and `live_capture` spans and the access-log events are
+//! exported: request IDs, methods, route templates, statuses and durations.
+//! Other log events (audit details, warnings) stay in the logs.
 
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -84,21 +85,23 @@ pub mod otel {
     use opentelemetry_otlp::WithExportConfig;
     use opentelemetry_sdk::Resource;
     use opentelemetry_sdk::trace::SdkTracerProvider;
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::filter::filter_fn;
 
     /// A layer exporting spans with OTLP/HTTP. `endpoint` overrides the
     /// `OTEL_EXPORTER_OTLP_*` variables (tests use it).
     pub fn layer<S>(
         endpoint: Option<&str>,
-    ) -> Result<
-        (
-            tracing_opentelemetry::OpenTelemetryLayer<S, opentelemetry_sdk::trace::Tracer>,
-            SdkTracerProvider,
-        ),
-        String,
-    >
+    ) -> Result<(Box<dyn Layer<S> + Send + Sync>, SdkTracerProvider), String>
     where
-        S: tracing::Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
+        S: tracing::Subscriber
+            + Send
+            + Sync
+            + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
     {
+        // HTTPS endpoints use rustls with ring, like the database driver.
+        // Another caller may have installed a provider already.
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let mut builder = opentelemetry_otlp::SpanExporter::builder().with_http();
         if let Some(endpoint) = endpoint {
             builder = builder.with_endpoint(endpoint);
@@ -113,6 +116,17 @@ pub mod otel {
             )
             .build();
         let tracer = provider.tracer(crate::SERVICE_NAME);
-        Ok((tracing_opentelemetry::layer().with_tracer(tracer), provider))
+        let exported = filter_fn(|meta| {
+            if meta.is_span() {
+                matches!(meta.name(), "request" | "live_capture")
+            } else {
+                meta.target() == "access"
+            }
+        });
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(tracer)
+            .with_filter(exported)
+            .boxed();
+        Ok((layer, provider))
     }
 }

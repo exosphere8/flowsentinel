@@ -18,15 +18,21 @@ Every response has an `X-Request-Id` header.
   is kept, so a reverse proxy's ID follows the request through.
 - Otherwise the server generates a random 32-character hexadecimal ID.
 
-Quote the ID when reporting a problem: every log line written while the request was handled
-carries it.
+Quote the ID when reporting a problem.
+
+- **Log lines.** Every log line written while the request is answered carries the ID. This holds
+  whatever `RUST_LOG` filters out: the request span is created at `ERROR` level, so it stays
+  whenever any log line is written.
+- **Live captures.** A capture runs on after its start request has been answered. Its later lines
+  carry the start request's ID in a `live_capture` span instead.
 
 ## Logs
 
 Logs are JSON lines on stdout. `RUST_LOG` sets the level and filters (default `info`; for
 example `RUST_LOG=info,sqlx=warn`).
 
-Each request produces one access-log line with target `access`. It is written within the request's
+Each request produces one access-log line with target `access`. A request the client abandons
+before the answer is logged too, with status `499`. The line is written within the request's
 `request` span, so it carries the request ID. This line was logged for
 `GET /api/v1/captures/5/flows?filter=...` without a session:
 
@@ -35,9 +41,17 @@ Each request produces one access-log line with target `access`. It is written wi
 ```
 
 - **`route`** is the matched route template, never the request path, so capture IDs and query
-  strings (which may hold display filters) are not logged. Paths that match no API route are
-  logged as `unmatched`, dashboard files as `dashboard`, and `/health` and `/ready` as
-  themselves.
+  strings (which may hold display filters) are not logged. This holds even when the request is
+  refused, for example without a session or from another site. Responses without a route have
+  fixed labels:
+
+  | Label | Responses |
+  | --- | --- |
+  | `misdirected` | `421`, refused because of the `Host` header |
+  | `method_not_allowed` | `405` for an API path |
+  | `unmatched` | Other API paths that match no route |
+  | `dashboard` | Dashboard files |
+  | `/health`, `/ready` | The probes themselves |
 - **`method`** is one of `GET`, `HEAD`, `POST`, `PUT`, `PATCH`, `DELETE`, `OPTIONS`, or
   `OTHER`.
 
@@ -55,7 +69,7 @@ header.
 | Endpoint | Answers | Use |
 | --- | --- | --- |
 | `GET /health` | `200 {"status":"ok","service":"flowsentinel-api"}` whenever the process serves HTTP | Liveness: restart the process if it fails |
-| `GET /ready` | `200 {"status":"ready","database":"ok"}` when PostgreSQL answers within 2 seconds; otherwise `503 {"status":"not_ready","database":"unavailable"}` | Readiness: send traffic only when it passes |
+| `GET /ready` | `200 {"status":"ready","database":"ok"}` when PostgreSQL answers within 2 seconds; otherwise `503 {"status":"not_ready","database":"unavailable"}`. The database is checked at most once a second; concurrent probes share the check | Readiness: send traffic only when it passes |
 
 Do not use `/ready` for liveness: a database outage should not restart every API process. The
 container image's `HEALTHCHECK` (`flowsentinel-api healthcheck`) probes `/health`.
@@ -104,7 +118,8 @@ Some useful queries and alerts:
 
 ## OpenTelemetry traces
 
-Builds with the `otel` feature can export traces with OTLP over HTTP/protobuf:
+Builds with the `otel` feature can export traces with OTLP over HTTP/protobuf, to `http://` or
+`https://` endpoints:
 
 ```sh
 cargo build --release -p api-server --features otel
@@ -114,10 +129,11 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 ./target/release/api-server
 - **When it exports.** Only when `OTEL_EXPORTER_OTLP_ENDPOINT` or
   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set. The exporter also reads the other standard
   `OTEL_EXPORTER_OTLP_*` variables, such as headers and timeout.
-- **What it exports.** Spans are reported with the service name `flowsentinel-api`. Each
-  request's span carries its request ID and method.
+- **HTTPS.** Endpoints are verified against the system's certificate store, or the bundle named
+  by `SSL_CERT_FILE`.
+- **What it exports.** Only the `request` spans (with request ID and method), the `live_capture`
+  spans, and the access-log events (route template, status, duration). They are reported with
+  the service name `flowsentinel-api`. Other log events, such as warnings or anything about
+  accounts, stay in the logs.
 - **On shutdown.** Spans still buffered are flushed.
 - **Default builds.** Without the feature, the server ignores these variables.
-
-The tracing pipeline sees the same fields as the logs, so the same exclusions apply: no bodies,
-query strings, credentials or packet data.

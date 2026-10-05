@@ -62,8 +62,8 @@ cargo deny check   # advisories, licenses, sources (cargo install cargo-deny --l
 ```
 
 CI also builds and tests the optional features (`--features api-server/live-capture`,
-`--features api-server/otel`), runs `npm audit --audit-level=high`, scans the Git history for
-secrets with gitleaks, and runs CodeQL (see [docs/hardening.md](docs/hardening.md)).
+`--features api-server/otel`), runs `npm audit --audit-level=high`, scans for secrets with
+gitleaks (new commits on each push, the whole history weekly), and runs CodeQL (see [docs/hardening.md](docs/hardening.md)).
 
 For changes that could affect speed, compare `cargo bench -p analysis` before and after, and run
 `scripts/load_test.py` against a local server ([docs/performance.md](docs/performance.md)).

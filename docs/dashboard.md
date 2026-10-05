@@ -117,7 +117,7 @@ The Vite development server reloads on every change and forwards `/api` and `/he
 | `Referrer-Policy` | `no-referrer` |
 | `Cross-Origin-Opener-Policy` | `same-origin` |
 | `Cross-Origin-Resource-Policy` | `same-origin` |
-| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()` |
+| `Permissions-Policy` | `camera=(), microphone=(), geolocation=(), payment=(), usb=()` |
 | `Strict-Transport-Security` | `max-age=31536000`, only with `FLOWSENTINEL_SECURE_COOKIES=true` (served through HTTPS) |
 
 API responses also carry `Cache-Control: no-store`, and every response carries an

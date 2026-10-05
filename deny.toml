@@ -22,6 +22,8 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # Mozilla's CA certificate data (webpki-root-certs, for OTLP over HTTPS).
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

@@ -49,6 +49,9 @@ opentelemetry = "0.33.0"
 opentelemetry_sdk = "0.33.0"
 opentelemetry-otlp = { version = "0.33.0", default-features = false, features = ["http-proto", "trace", "reqwest-blocking-client"] }
 tracing-opentelemetry = "0.34.0"
+# TLS for OTLP export, with the same ring crypto as the database driver.
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"

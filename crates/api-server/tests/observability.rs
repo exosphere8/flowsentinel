@@ -159,6 +159,67 @@ async fn every_response_has_a_request_id_and_hardened_headers() {
     assert!(status.is_client_error(), "{status}");
     assert!(headers.get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
 
+    // Responses made outside a route keep a precise label, and API paths
+    // are never cached even when refused before routing.
+    let signed_with = |method: Method, uri: &str, origin: Option<&str>| {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::COOKIE, format!("{COOKIE_NAME}={}", token.to_hex()))
+            .header(CSRF_HEADER, token.csrf_token());
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        request.body(Body::empty()).unwrap()
+    };
+    let (status, _, _) = send(
+        &state,
+        signed_with(Method::DELETE, "/api/v1/overview", None),
+    )
+    .await;
+    assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+    let (status, _, _) = send(
+        &state,
+        signed_with(
+            Method::POST,
+            "/api/v1/auth/logout",
+            Some("https://evil.example"),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for uri in ["/api/v1/captures", "/ready"] {
+        let (status, headers, _) = send(
+            &state,
+            Request::get(uri)
+                .header(header::HOST, "evil.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        if uri.starts_with("/api") {
+            assert_eq!(status, StatusCode::MISDIRECTED_REQUEST);
+        }
+        assert_eq!(headers[header::CACHE_CONTROL], "no-store", "{uri}");
+    }
+    // A request the client abandons is still logged and counted, as 499.
+    let all = u32::try_from(state.filter_slots.available_permits()).unwrap();
+    let held = Arc::clone(&state.filter_slots)
+        .acquire_many_owned(all)
+        .await
+        .unwrap();
+    let abandoned = app_with_state(state.clone()).oneshot(signed_with(
+        Method::GET,
+        "/api/v1/captures/9/flows?filter=udp",
+        None,
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), abandoned)
+            .await
+            .is_err()
+    );
+    drop(held);
+
     // Metrics count route templates, never raw paths.
     let gauges: GaugeSource = Arc::new(|| vec![("flowsentinel_test", "Test.", 1.0)]);
     let metrics = metrics_router(Arc::clone(&state.metrics), gauges);
@@ -181,6 +242,17 @@ async fn every_response_has_a_request_id_and_hardened_headers() {
         "flowsentinel_http_requests_total{method=\"GET\",route=\"/api/v1/captures\",status=\"401\"} 1"
     ));
     assert!(text.contains("route=\"/health\""));
+    for line in [
+        "{method=\"DELETE\",route=\"method_not_allowed\",status=\"405\"} 1",
+        "{method=\"POST\",route=\"/api/v1/auth/logout\",status=\"403\"} 1",
+        "{method=\"GET\",route=\"misdirected\",status=\"421\"} 2",
+        "{method=\"GET\",route=\"/api/v1/captures/{id}/flows\",status=\"499\"} 1",
+    ] {
+        assert!(
+            text.contains(&format!("flowsentinel_http_requests_total{line}")),
+            "{line}\n{text}"
+        );
+    }
     assert!(!text.contains("/api/v1/captures/7"));
     assert!(text.contains("flowsentinel_test 1"));
     db.drop_database().await;
@@ -236,4 +308,30 @@ async fn readiness_follows_the_database() {
     // Liveness does not depend on the database.
     let (status, _, _) = send(&down, get("/health")).await;
     assert_eq!(status, StatusCode::OK);
+
+    // One check answers for a second: with the database down, a check
+    // waits out the connection timeout (0.5 s here), and the probes right
+    // after it, concurrent or not, answer at once from that check.
+    let app = app_with_state(down.clone());
+    let started = std::time::Instant::now();
+    let first = app.clone().oneshot(get("/ready")).await.unwrap().status();
+    let checked = started.elapsed();
+    assert_eq!(first, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(checked >= Duration::from_millis(400), "{checked:?}");
+    let started = std::time::Instant::now();
+    let probes = (0..20).map(|_| {
+        let app = app.clone();
+        async move { app.oneshot(get("/ready")).await.unwrap().status() }
+    });
+    let statuses = futures_util::future::join_all(probes).await;
+    assert!(
+        statuses
+            .iter()
+            .all(|s| *s == StatusCode::SERVICE_UNAVAILABLE)
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
 }

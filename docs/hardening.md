@@ -21,7 +21,11 @@ and vulnerability reporting are in [../SECURITY.md](../SECURITY.md).
 - [ ] **Encrypt the database connection** when PostgreSQL is on another host: see
       [Database](#database).
 - [ ] **Give the upload directory to the server alone** (`chmod 700`). The server refuses to start
-      if other users can write to it, unless it has the sticky bit like `/tmp`.
+      if other users can write to it, unless it has the sticky bit like `/tmp`. In Kubernetes,
+      `emptyDir` volumes are writable by everyone, so point `FLOWSENTINEL_UPLOAD_DIR` at a
+      subdirectory owned by the server's user with mode 700. For example, create it with
+      `mkdir -m 700 /uploads/private` in an init container running as the same user (UID 10001
+      for the image).
 - [ ] **Keep metrics private.** If you set `FLOWSENTINEL_METRICS_ADDR`, bind it to loopback or a
       network only your collector reaches; it has no authentication
       ([observability.md](observability.md#metrics)).
@@ -103,7 +107,19 @@ We tested against PostgreSQL 16 with a test CA:
 With this client, `verify-ca` also checks the host name. Use `verify-full` to make that explicit.
 
 Give the database account only the rights it needs. It owns FlowSentinel's tables and runs the
-migrations at startup; it needs no superuser or `CREATEDB` rights.
+migrations at startup; it needs no superuser or `CREATEDB` rights. Migrations and the hourly
+retention purge lift the five-minute statement limit for themselves, because they can
+legitimately run longer.
+
+Behind a connection pooler such as PgBouncer, the per-connection settings may be refused or
+ignored: PgBouncer rejects the `options` startup parameter unless it is listed in
+`ignore_startup_parameters`, and then does not apply it. In that case, set the limits on the
+database role instead:
+
+```sql
+ALTER ROLE flowsentinel SET statement_timeout = '300s';
+ALTER ROLE flowsentinel SET idle_in_transaction_session_timeout = '300s';
+```
 
 ## Containers
 
@@ -130,7 +146,7 @@ CI runs on every push and pull request:
 | --- | --- |
 | `cargo-deny` (`deny.toml`) | Rust dependencies with RustSec advisories (vulnerable, unmaintained, unsound or yanked), licenses outside the allow-list, crates from unknown registries or Git, wildcard versions |
 | `npm audit --audit-level=high` | Dashboard dependencies with high or critical advisories |
-| gitleaks (`.gitleaks.toml`) | Credentials or keys anywhere in the Git history. Synthetic fixtures and tests are allow-listed because they plant fake secrets on purpose |
+| gitleaks (`.gitleaks.toml`, `.github/workflows/secrets.yml`) | Credentials or keys in new commits on every push and pull request, and in the whole Git history weekly. Synthetic fixtures and tests are allow-listed because they plant fake secrets on purpose |
 | CodeQL (`.github/workflows/codeql.yml`) | Security issues in the dashboard's TypeScript and in the workflows; also weekly |
 | `clippy -D warnings`, workspace lints | Rust mistakes. `unsafe` code is forbidden. `unwrap`, `expect`, `panic!`, `todo!`, `unimplemented!` and unchecked indexing are denied outside tests, so hostile input cannot crash the server through a forgotten shortcut |
 | ESLint | Dashboard code, including a ban on `innerHTML`, `outerHTML` and `dangerouslySetInnerHTML` |

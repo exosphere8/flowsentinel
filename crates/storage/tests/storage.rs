@@ -543,6 +543,10 @@ async fn server_connections_are_named_and_time_limited() {
     let storage = Storage::connect_with(db.connect_options(), 1)
         .await
         .unwrap();
+    // Maintenance lifts the limit for itself only: the pool's one
+    // connection has it again afterwards.
+    storage.migrate().await.unwrap();
+    storage.purge_expired().await.unwrap();
     let show = |name: &'static str| {
         let pool = storage.pool().clone();
         async move {

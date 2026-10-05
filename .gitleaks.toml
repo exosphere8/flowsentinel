@@ -9,6 +9,11 @@ useDefault = true
 
 [allowlist]
 description = "Synthetic fixtures and tests"
+# A made-up token in a decoder unit test (crates/decoder/src/app/http.rs),
+# which checks that tokens in URL paths are masked.
+regexes = [
+    '''Ab3dE6gH9jK2mN5pQ8rS1tV4wX7zA0cE3fG6''',
+]
 paths = [
     '''^fixtures/''',
     '''^scripts/generate_pcap_fixtures\.py$''',
