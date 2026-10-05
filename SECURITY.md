@@ -28,14 +28,16 @@ coordinated disclosure that credits you unless you prefer otherwise.
 
 ## Supported versions
 
-FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixes.
+FlowSentinel is pre-1.0. Security fixes go to `main` and are released as a patch of the latest
+minor version (see [docs/releasing.md](docs/releasing.md)).
 
 | Version | Supported |
 | --- | --- |
+| Latest release (0.1.x) | Yes |
 | `main` | Yes |
-| Older commits | No |
+| Older releases | No; upgrade to the latest release |
 
-## Current security posture (Milestone 10)
+## Current security posture
 
 - Every API call except sign-in and `/health` needs a signed-in session, and each account has a
   role: viewers read, analysts also import and triage, admins also delete captures, change
@@ -126,8 +128,8 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 - The database URL, which contains a password, is never logged or returned. `Config`'s `Debug`
   output redacts it. Retention (default 30 days, hourly purge) bounds how long imported metadata
   is kept; see [docs/data-retention.md](docs/data-retention.md).
-- PostgreSQL and Redis bind to loopback, and Compose refuses to start them without passwords
-  from `.env`. `.env` is git-ignored; only `.env.example` with placeholder values is committed.
+- PostgreSQL binds to loopback, and Compose refuses to start it without a password from
+  `.env`. `.env` is git-ignored; only `.env.example` with placeholder values is committed.
 - `.gitignore` blocks `*.pcap`/`*.pcapng` outside `fixtures/` so real captures aren't committed by
   accident. Fixtures must be synthetic.
 - All crates set `unsafe_code = "forbid"`.
@@ -173,5 +175,4 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
   invalid one. Only an alert's status can be changed through the API. Details:
   [docs/detection-rules.md](docs/detection-rules.md).
 
-Later milestones add further upload and container hardening and TLS to the database (11), and dependency auditing, secret scanning and
-static analysis in CI (11).
+Planned improvements are tracked as GitHub issues; reports and suggestions are welcome.

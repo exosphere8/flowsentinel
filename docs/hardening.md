@@ -133,7 +133,7 @@ The `Dockerfile` and the Compose `app` profile run the server:
 - published on `127.0.0.1` only;
 - with a health check built into the server binary, so the image contains no shell tools for it.
 
-The PostgreSQL and Redis containers also run with `no-new-privileges`; their ports are published
+The PostgreSQL container also runs with `no-new-privileges`; its port is published
 on `127.0.0.1` only.
 
 Live capture in a container needs `NET_RAW` added back; see [permissions.md](permissions.md).

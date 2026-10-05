@@ -5,6 +5,8 @@
 !crates/
 !frontend/
 !docs/openapi.json
+!LICENSE
+!THIRD_PARTY_LICENSES.md
 crates/**/target/
 frontend/node_modules/
 frontend/dist/

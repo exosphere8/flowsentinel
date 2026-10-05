@@ -8,6 +8,7 @@ Contributions are welcome. FlowSentinel is security software, so the bar for saf
   decryption or credential extraction will be declined. See [SECURITY.md](SECURITY.md).
 - **No real traffic in the repository.** Fixtures must be synthetic and reproducible from a script.
 - **Report vulnerabilities privately**, as described in [SECURITY.md](SECURITY.md), never in public issues.
+- **Be respectful.** Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Local setup
 
@@ -103,7 +104,8 @@ cd frontend && npm run gen:api
   output. CI fails if the committed fixtures differ from the script's output.
 - Parsers of untrusted input need property tests, and should be added to the cargo-fuzz targets
   in `fuzz/` (see `fuzz/README.md`). Run a fuzz session after changing a parser.
-- Keep documentation in sync: user-visible changes update the README or `docs/`.
+- Keep documentation in sync: user-visible changes update the README or `docs/`, and add an
+  entry under `Unreleased` in [CHANGELOG.md](CHANGELOG.md).
 - Dashboard code is strict TypeScript. Render data as text only (never `dangerouslySetInnerHTML`),
   load nothing from other origins, never render packet contents, and give every control a label.
   Each page needs tests for its loading, error and empty states and an axe-core check.

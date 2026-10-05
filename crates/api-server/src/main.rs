@@ -19,7 +19,7 @@ use tokio::net::TcpListener;
 const PURGE_INTERVAL: Duration = Duration::from_secs(3600);
 /// How long in-flight requests may run after a shutdown signal.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
-const USAGE: &str = "usage: flowsentinel-api [healthcheck | create-user --username NAME --role admin|analyst|viewer]";
+const USAGE: &str = "usage: flowsentinel-api [healthcheck | create-user --username NAME --role admin|analyst|viewer | --version | --help]";
 /// Time allowed for `api-server healthcheck`.
 const HEALTHCHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -28,6 +28,18 @@ async fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None => {}
+        Some("--version" | "-V") if args.len() == 1 => {
+            println!("flowsentinel-api {}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        Some("--help" | "-h") if args.len() == 1 => {
+            println!(
+                "FlowSentinel API server and dashboard.\n\n{USAGE}\n\n\
+                 Without arguments, serves the API. Settings come from FLOWSENTINEL_* \
+                 environment variables; see the README."
+            );
+            return ExitCode::SUCCESS;
+        }
         Some("healthcheck") if args.len() == 1 => return run_healthcheck().await,
         Some("create-user") => return run_create_user(args.get(1..).unwrap_or_default()).await,
         Some(_) => {

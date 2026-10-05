@@ -72,7 +72,7 @@ On the small fixture, which measures the server's per-request cost rather than q
 
 Throughput levels off because reads share a bounded set of database connections
 (`FLOWSENTINEL_DB_MAX_CONNECTIONS`, default 10, minus two per import slot; see
-[api.md](api.md#concurrency)). Beyond that point, more clients add waiting time instead of
+[api.md](api.md#security-notes)). Beyond that point, more clients add waiting time instead of
 throughput.
 
 On the 60,000-flow capture above, single requests (median of five):

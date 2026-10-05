@@ -6,10 +6,10 @@ NPM ?= npm
 help: ## List targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F ':.*## ' '{printf "  %-15s %s\n", $$1, $$2}'
 
-up: ## Start PostgreSQL and Redis and wait until healthy
+up: ## Start PostgreSQL and wait until healthy
 	docker compose up -d --wait
 
-down: ## Stop PostgreSQL and Redis (data volumes are kept)
+down: ## Stop PostgreSQL (the data volume is kept)
 	docker compose down
 
 dev: ## Run the API server on 127.0.0.1:8080 with settings from .env

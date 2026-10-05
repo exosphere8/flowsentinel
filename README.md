@@ -12,58 +12,44 @@ heuristic alerts that a human can verify.
 > authorized to inspect. FlowSentinel is an observability tool, not an offensive one: it has no
 > packet injection, scanning, decryption or credential-extraction features.
 
-## Status
+## Features
 
-FlowSentinel is built in milestones (see [Roadmap](#roadmap)). Completed so far:
+- **Offline analysis** of classic pcap files with the `flowsentinel` CLI or through the API,
+  under strict size, packet and time limits.
+- **Protocol decoding** of Ethernet (with VLANs), ARP, IPv4, IPv6, ICMP, ICMPv6, TCP and UDP.
+  Bounded **application metadata** from DNS, DHCP, HTTP/1.x and visible TLS handshakes.
+  Credentials, cookies, query strings and bodies are redacted; TLS is never decrypted, and
+  payloads are measured, never stored or shown.
+- **Bidirectional flows** with per-direction statistics and approximate TCP state, within fixed
+  memory limits.
+- **Explainable detections:** twelve heuristic rules (scans, failed connections, beaconing, rare
+  ports, large outbound transfers, cleartext logins, DNS volume and tunneling, ARP conflicts and
+  floods). Each alert shows its evidence, uncertainty and likely false positives, and analysts
+  triage them.
+- **Web dashboard and REST API:**
+  - metadata stored in PostgreSQL;
+  - Wireshark-like display filters, translated into parameterized SQL;
+  - an OpenAPI description;
+  - retention controls.
+- **Accounts and auditing:**
+  - viewer, analyst and admin roles; Argon2id passwords;
+  - sessions with timeouts, CSRF protection and sign-in rate limits;
+  - a security audit log.
+- **Authorized live capture** (optional, off by default): admin-only, bounded in time, packets
+  and bytes, and needs only `CAP_NET_RAW`.
+- **Operations:**
+  - request IDs in every log line, health and readiness probes;
+  - optional Prometheus metrics and OpenTelemetry traces;
+  - a hardened container image ([docs/hardening.md](docs/hardening.md)).
 
-- **Milestone 0, foundation:** a Cargo workspace, an HTTP API with a health check, a CLI shell,
-  Docker Compose services and CI.
-- **Milestone 1, safe offline PCAP ingestion:** `flowsentinel inspect --pcap` reads classic
-  libpcap files with strict resource limits and reports container metadata only.
-- **Milestone 2, core packet decoding:** `inspect --decode` decodes Ethernet (with VLANs), ARP,
-  IPv4, IPv6 (with extension headers), ICMP, ICMPv6, TCP and UDP headers into a protocol tree.
-  Payloads are measured, never shown.
-- **Milestone 3, application metadata:** `inspect --decode` also extracts bounded metadata from
-  DNS, DHCP, HTTP/1.x and visible TLS handshakes (SNI, ALPN, versions, cipher-suite IDs).
-  Credentials, cookies, query strings and bodies are redacted; TLS is never decrypted.
-- **Milestone 4, flow reconstruction:** `flowsentinel flows --pcap` groups packets into
-  bidirectional flows with per-direction counters, size and timing statistics, approximate TCP
-  state and application metadata, within fixed memory limits.
-- **Milestone 5, persistence and REST API:** the API server imports PCAP uploads into PostgreSQL
-  as metadata only (captures, packets, flows, DNS/HTTP/TLS events) and serves them with
-  pagination, validated sorting, structured errors, retention controls and an OpenAPI
-  description.
-- **Milestone 6, display filters:** packet and flow lists accept Wireshark-like filters such as
-  `ip.addr == 192.0.2.0/24 and tls.sni contains "example"`. Filters are type-checked against a
-  field catalog, report errors with positions, and are translated into parameterized SQL.
-- **Milestone 7, explainable detections:** `flowsentinel detect --pcap` and every API import run
-  twelve configurable rules (scans, failed connections, beaconing, rare ports, large outbound
-  transfers, cleartext logins, DNS volume and tunneling, ARP conflicts and floods). Each alert is
-  a heuristic indicator with its evidence, cited flows or packets, uncertainty and likely false
-  positives, never a verdict. Analysts triage alerts through the API.
-- **Milestone 8, dashboard:** a React and TypeScript web dashboard served by the API server shows
-  an overview, captures, packets with their protocol trees, flows, alerts with their evidence
-  and triage, and settings. Tables are paged, sorted and filtered on the server, display filters
-  are validated as they are typed, and no packet payload is ever rendered.
-- **Milestone 9, accounts and auditing:** every API call needs a signed-in session. Accounts have
-  the role viewer, analyst or admin; passwords are hashed with Argon2id. Sessions expire after
-  inactivity and after a fixed lifetime, state changes need a CSRF token, repeated failed
-  sign-ins are locked out, and a security audit log records sign-ins, refusals and every change.
-- **Milestone 10, authorized live capture:** admins can record traffic from a server interface
-  through libpcap within time, packet and size limits, with a validated BPF filter and
-  promiscuous mode off by default, and analyze it like an import. It is off unless enabled, needs
-  only the `CAP_NET_RAW` capability (never root), and drops and counts packets rather than
-  queueing them when the writer falls behind.
-- **Milestone 11, observability and hardening:** every request has an ID that appears in its
-  JSON log lines. A readiness probe checks the database. Optional Prometheus metrics and
-  OpenTelemetry traces never carry capture data. Further hardening:
-  - stricter response headers, and HSTS behind HTTPS;
-  - database TLS with certificate verification, and server-side timeouts;
-  - a lint that denies panicking shortcuts outside tests;
-  - dependency, license and secret scanning, and CodeQL, in CI.
+See the [changelog](CHANGELOG.md) for what each release contains and its known limitations.
 
-  Benchmarks and a load-test script measure throughput and latency (see
-  [docs/performance.md](docs/performance.md)).
+## Install
+
+Releases ship as a container image (`ghcr.io/exosphere8/flowsentinel`) and as prebuilt binaries
+for Linux, macOS and Windows, with checksums and build provenance attestations. See
+[docs/installation.md](docs/installation.md). To build from source, follow the quick start
+below.
 
 ## Quick start
 
@@ -76,7 +62,7 @@ cd flowsentinel
 cp .env.example .env            # replace each "change-me", using the same password in
                                 # POSTGRES_PASSWORD and FLOWSENTINEL_DATABASE_URL
 
-docker compose up -d --wait     # PostgreSQL + Redis, waits for health checks
+docker compose up -d --wait     # PostgreSQL, waits for its health check
 make admin                      # creates the first admin account (asks for a name and password)
 make dev                        # loads .env, migrates the database, serves http://127.0.0.1:8080
 ```
@@ -258,7 +244,7 @@ $env:CARGO_TARGET_DIR = "C:\t\flowsentinel-target"
 | `FLOWSENTINEL_METRICS_ADDR` | not set | Serve Prometheus metrics at `/metrics` on this address, without authentication (see [docs/observability.md](docs/observability.md)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | not set | Export traces with OpenTelemetry (builds with the `otel` feature) |
 | `RUST_LOG` | `info` | Log filter; logs are structured JSON on stdout |
-| `POSTGRES_*`, `REDIS_*` | see `.env.example` | Docker Compose services |
+| `POSTGRES_*` | see `.env.example` | The Docker Compose database |
 
 Keep the server on loopback, or put it behind an HTTPS reverse proxy and set
 `FLOWSENTINEL_SECURE_COOKIES=true`; it logs a warning when it listens on a non-loopback address
@@ -268,7 +254,7 @@ without secure cookies. See [docs/authentication.md](docs/authentication.md).
 
 | Command | Action |
 | --- | --- |
-| `make up` / `make down` | Start or stop PostgreSQL and Redis |
+| `make up` / `make down` | Start or stop PostgreSQL |
 | `make dev` | Run the API server with the settings in `.env` |
 | `make admin` | Create an admin account (asks for a name and a password) |
 | `make fmt` | Format code |
@@ -322,7 +308,7 @@ tests/          Notes on where the cross-crate and cross-service tests live
 | 9 | Authentication, RBAC and auditing | Done |
 | 10 | Authorized live capture | Done |
 | 11 | Observability, performance and hardening | Done |
-| 12 | Public release (v0.1.0) | Planned |
+| 12 | Public release (v0.1.0) | Done |
 
 ## License
 

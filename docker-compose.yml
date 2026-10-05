@@ -1,7 +1,7 @@
 # Local services. The API server stores capture metadata in PostgreSQL (see
-# FLOWSENTINEL_DATABASE_URL in .env.example); Redis is not used by the code yet.
+# FLOWSENTINEL_DATABASE_URL in .env.example).
 #
-#   docker compose up -d --wait                  PostgreSQL and Redis, for `make dev`
+#   docker compose up -d --wait                  PostgreSQL, for `make dev`
 #   docker compose --profile app up -d --build   ...plus the API server with the
 #                                                dashboard on http://127.0.0.1:8080
 #
@@ -10,7 +10,7 @@
 #     flowsentinel-api create-user --username admin --role admin
 #
 # Ports bind to 127.0.0.1 only. Credentials come from .env (see .env.example);
-# compose refuses to start if a password is unset.
+# compose refuses to start if the password is unset.
 
 name: flowsentinel
 
@@ -35,37 +35,17 @@ services:
       retries: 10
       start_period: 10s
 
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command:
-      - redis-server
-      - --requirepass
-      - ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-      - --appendonly
-      - "yes"
-    environment:
-      # Lets redis-cli in the health check authenticate without a CLI flag.
-      REDISCLI_AUTH: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redis-data:/data
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 5s
-
   # The API server and dashboard, built from the Dockerfile. Optional: the
   # `app` profile keeps `docker compose up` to the databases for development.
   app:
     profiles: ["app"]
     build: .
-    image: flowsentinel-api:local
+    # To run a published release instead of building, set in .env
+    #   FLOWSENTINEL_IMAGE=ghcr.io/exosphere8/flowsentinel:0.1.0
+    # then run (see docs/installation.md):
+    #   docker compose --profile app pull app
+    #   docker compose --profile app up -d --no-build --wait
+    image: ${FLOWSENTINEL_IMAGE:-flowsentinel-api:local}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -95,5 +75,4 @@ services:
 
 volumes:
   postgres-data:
-  redis-data:
   uploads:

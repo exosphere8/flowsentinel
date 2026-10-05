@@ -7,6 +7,8 @@
 # certificates and libpcap, running as an unprivileged user. Live capture is
 # compiled in but off (FLOWSENTINEL_LIVE_CAPTURE), and the container has no
 # capture capability unless an operator adds it (see docs/permissions.md).
+# OpenTelemetry export is compiled in and used only when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set (see docs/observability.md).
 
 FROM node:22-trixie-slim AS dashboard
 WORKDIR /src/frontend
@@ -23,7 +25,7 @@ RUN apt-get update \
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-RUN cargo build --release --locked -p api-server --features live-capture
+RUN cargo build --release --locked -p api-server --features live-capture,otel
 
 FROM debian:trixie-slim
 RUN apt-get update \
@@ -33,6 +35,7 @@ RUN apt-get update \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/flowsentinel/uploads
 COPY --from=server /src/target/release/api-server /usr/local/bin/flowsentinel-api
 COPY --from=dashboard /src/frontend/dist /srv/dashboard
+COPY LICENSE THIRD_PARTY_LICENSES.md /usr/share/doc/flowsentinel/
 ENV FLOWSENTINEL_API_ADDR=0.0.0.0:8080 \
     FLOWSENTINEL_DASHBOARD_DIR=/srv/dashboard \
     FLOWSENTINEL_UPLOAD_DIR=/var/lib/flowsentinel/uploads
