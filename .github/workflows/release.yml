@@ -1,0 +1,232 @@
+# Builds and publishes a release when a tag vX.Y.Z is pushed (see
+# docs/releasing.md):
+#   - binaries for Linux, macOS and Windows, with build provenance;
+#   - a container image on ghcr.io, with an SBOM and provenance;
+#   - a GitHub release with the changelog section and SHA-256 checksums.
+#
+# Changes to this workflow, the release check or the Dockerfile run the same
+# builds on branches and pull requests without publishing anything.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+    branches: [main, "feature/**"]
+    paths:
+      - .github/workflows/release.yml
+      - scripts/check_release.py
+      - Dockerfile
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/check_release.py
+      - Dockerfile
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PUBLISH: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  check:
+    name: Release check
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Versions, lock files and changelog agree
+        run: |
+          if [ "$PUBLISH" = "true" ]; then
+            python3 scripts/check_release.py --tag "$GITHUB_REF_NAME" --notes notes.md
+          else
+            python3 scripts/check_release.py --notes notes.md
+          fi
+      - id: version
+        run: |
+          python3 -c 'import tomllib; print("version=" + tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: notes
+          path: notes.md
+
+  dashboard:
+    name: Dashboard
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run check:api
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard
+          path: frontend/dist
+
+  binaries:
+    name: Binaries (${{ matrix.target }})
+    needs: [check, dashboard]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # An older Ubuntu, so the binaries run on older glibc versions.
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-22.04-arm, target: aarch64-unknown-linux-gnu }
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Release binaries do not include live capture, which needs libpcap at
+      # run time; the container image does.
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET" -p cli -p api-server --features api-server/otel
+      - uses: actions/download-artifact@v5
+        with:
+          name: dashboard
+          path: dashboard
+      - name: Package
+        shell: bash
+        run: |
+          name="flowsentinel-$VERSION-$TARGET"
+          exe=""
+          case "$TARGET" in *windows*) exe=".exe" ;; esac
+          mkdir -p "$name/config"
+          cp "target/$TARGET/release/flowsentinel$exe" "$name/flowsentinel$exe"
+          cp "target/$TARGET/release/api-server$exe" "$name/flowsentinel-api$exe"
+          cp -R dashboard "$name/dashboard"
+          cp -R docs "$name/docs"
+          cp LICENSE README.md CHANGELOG.md SECURITY.md .env.example "$name/"
+          cp config/detection.example.toml "$name/config/"
+          # Cross-compiled builds cannot run on this runner.
+          if [ "$TARGET" != x86_64-apple-darwin ]; then
+            "./$name/flowsentinel$exe" --version
+            "./$name/flowsentinel-api$exe" --version | grep -qx "flowsentinel-api $VERSION"
+          fi
+          case "$TARGET" in
+            *windows*) 7z a -tzip "$name.zip" "$name" > /dev/null; echo "ARCHIVE=$name.zip" >> "$GITHUB_ENV" ;;
+            *) tar -czf "$name.tar.gz" "$name"; echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV" ;;
+          esac
+      - name: Attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+
+  image:
+    name: Container image
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+      - name: Sign in to ghcr.io
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,enable=${{ env.PUBLISH != 'true' }}
+          labels: |
+            org.opencontainers.image.title=FlowSentinel
+            org.opencontainers.image.description=Defensive, metadata-first network packet analyzer
+            org.opencontainers.image.licenses=MIT
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ env.PUBLISH == 'true' }}
+          load: ${{ env.PUBLISH != 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: ${{ env.PUBLISH == 'true' }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
+      - name: Attest build provenance
+        if: env.PUBLISH == 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Smoke test
+        env:
+          REF: ${{ env.PUBLISH == 'true' && format('{0}@{1}', env.IMAGE, steps.build.outputs.digest) || fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: |
+          docker run --rm "$REF" --version | grep -qx "flowsentinel-api ${{ needs.check.outputs.version }}"
+          test "$(docker run --rm --entrypoint id "$REF" -u)" = "10001"
+
+  publish:
+    name: GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [check, binaries, image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - name: Checksums
+        run: |
+          mkdir release
+          mv artifacts/binary-*/* release/
+          cd release && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Create the release
+        run: |
+          {
+            cat artifacts/notes/notes.md
+            printf '\n### Container image\n\n```sh\ndocker pull %s:%s\n```\n' "$IMAGE" "$VERSION"
+            printf '\nVerify a download with `sha256sum -c SHA256SUMS` and its provenance with\n`gh attestation verify FILE --repo %s`.\n' "$GITHUB_REPOSITORY"
+          } > body.md
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag $prerelease \
+            --title "FlowSentinel $VERSION" --notes-file body.md

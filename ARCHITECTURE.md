@@ -37,7 +37,7 @@ will live. It is updated at the end of every milestone.
                 |               \________ DNS/ARP layers ______^                     |
                 +--------------------------------------------------------------------+
 
-  docker compose: PostgreSQL 16 (used by the API), Redis 7 (started; not yet used)
+  docker compose: PostgreSQL 16
 ```
 
 ### `crates/api-server`
@@ -298,8 +298,8 @@ metadata API, same-origin.
 
 ### Infrastructure
 
-- `docker-compose.yml` runs PostgreSQL and Redis bound to loopback, with health checks and
-  passwords required from `.env`. The optional `app` profile builds the `Dockerfile` (dashboard,
+- `docker-compose.yml` runs PostgreSQL bound to loopback, with a health check and a password
+  required from `.env`. The optional `app` profile builds the `Dockerfile` (dashboard,
   then a release `api-server`, on a slim Debian runtime) and runs it as UID 10001 with a
   read-only root file system, no capabilities and `no-new-privileges`, published on loopback.
 - CI (`.github/workflows/ci.yml`) runs format, clippy (`-D warnings`), tests and build on Linux

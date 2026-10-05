@@ -126,8 +126,8 @@ FlowSentinel is pre-1.0. Only the latest commit on `main` receives security fixe
 - The database URL, which contains a password, is never logged or returned. `Config`'s `Debug`
   output redacts it. Retention (default 30 days, hourly purge) bounds how long imported metadata
   is kept; see [docs/data-retention.md](docs/data-retention.md).
-- PostgreSQL and Redis bind to loopback, and Compose refuses to start them without passwords
-  from `.env`. `.env` is git-ignored; only `.env.example` with placeholder values is committed.
+- PostgreSQL binds to loopback, and Compose refuses to start it without a password from
+  `.env`. `.env` is git-ignored; only `.env.example` with placeholder values is committed.
 - `.gitignore` blocks `*.pcap`/`*.pcapng` outside `fixtures/` so real captures aren't committed by
   accident. Fixtures must be synthetic.
 - All crates set `unsafe_code = "forbid"`.

@@ -53,6 +53,8 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+      - name: Release metadata is consistent
+        run: python3 scripts/check_release.py
       - name: npm audit (high and critical)
         working-directory: frontend
         run: npm audit --audit-level=high

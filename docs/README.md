@@ -6,6 +6,8 @@
 | [../ARCHITECTURE.md](../ARCHITECTURE.md) | Components, boundaries, design principles |
 | [../SECURITY.md](../SECURITY.md) | Authorized use, vulnerability reporting, security posture |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | Local setup, workflow, quality gates |
+| [../CHANGELOG.md](../CHANGELOG.md) | Changes in each release, and known limitations |
+| [installation.md](installation.md) | Installing a release: container image or prebuilt binaries, upgrading |
 | [pcap-ingestion.md](pcap-ingestion.md) | `flowsentinel inspect`: supported input, limits, output, errors |
 | [protocol-decoding.md](protocol-decoding.md) | `inspect --decode`: protocols, statuses, warnings, validation rules |
 | [application-metadata.md](application-metadata.md) | DNS, DHCP, HTTP and TLS handshake metadata: recognition, fields, limits, redaction |
@@ -21,6 +23,6 @@
 | [observability.md](observability.md) | Request IDs, logs, health and readiness, Prometheus metrics, OpenTelemetry |
 | [hardening.md](hardening.md) | Deployment checklist, response headers, database TLS, containers, supply-chain checks |
 | [performance.md](performance.md) | Benchmarks, load testing, measured throughput and latency |
+| [releasing.md](releasing.md) | For maintainers: versioning, release checklist, the release workflow |
 | [../fuzz/README.md](../fuzz/README.md) | Running the cargo-fuzz targets |
 
-Each later milestone adds its own document here.

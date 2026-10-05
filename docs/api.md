@@ -15,7 +15,7 @@ TLS is never decrypted. The full OpenAPI 3.1 description is served at
 
 ```bash
 cp .env.example .env      # set POSTGRES_PASSWORD and the same password in FLOWSENTINEL_DATABASE_URL
-make up                   # PostgreSQL (and Redis) via Docker Compose
+make up                   # PostgreSQL via Docker Compose
 make dev                  # loads .env and runs the server on 127.0.0.1:8080
 ```
 
