@@ -87,7 +87,7 @@ reassembled.
 | `dominant_endpoint` | `initiator` or `responder` if that side sent more than 55% of the bytes, else `balanced` |
 | `end_reason` | `idle_timeout`, `tcp_finished`, `evicted`, `capture_end` or `clock_reset` |
 | `warnings` | `out_of_order_timestamp`, `missing_timestamp`, `portless_fragments`, `missing_transport_header` and `timestamp_outlier`, each with a count |
-| `alert_ids` | Reserved for alerts that reference this flow (Milestone 7); currently empty |
+| `alert_ids` | IDs of the alerts that cite this flow, filled in when detection runs (`flowsentinel detect` and API imports); empty in `flowsentinel flows` output |
 
 Statistics use constant memory per flow: Welford's algorithm for mean and standard deviation, and
 the first 256 sizes for the median. Application lists are capped: 4 DNS queries, 4 names per

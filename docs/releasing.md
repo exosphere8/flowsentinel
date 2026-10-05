@@ -26,15 +26,27 @@ older database. Migrations are never edited once released.
 3. **Bump the version** everywhere:
    - the workspace version in `Cargo.toml`, then `cargo update -w` to update `Cargo.lock`;
    - `npm version X.Y.Z --no-git-tag-version` in `frontend/`;
-   - versions in the examples of [installation.md](installation.md), `.env.example` and
-     `docker-compose.yml`.
+   - the OpenAPI snapshot, which carries the version:
+     `FLOWSENTINEL_UPDATE_OPENAPI=1 cargo test -p api-server --test openapi`, then
+     `npm run gen:api` in `frontend/`;
+   - versions in the examples of the README, [installation.md](installation.md), `.env.example`
+     and `docker-compose.yml`.
+
+   Then refresh the third-party license notices: `python3 scripts/third_party_licenses.py`. This
+   needs `npm ci` in `frontend/`. The release workflow regenerates them for what it builds; the
+   committed copy is what local image builds use.
 4. **Update [CHANGELOG.md](../CHANGELOG.md):**
    - Move the `Unreleased` entries under `## [X.Y.Z] - YYYY-MM-DD`, dated the day you tag.
    - Under **Changed**, say what users must do.
    - Update the links at the bottom.
-5. **Run `python3 scripts/check_release.py --tag vX.Y.Z`.** It checks that the versions in
-   `Cargo.toml`, `Cargo.lock`, `package.json` and `package-lock.json` agree, and that the
-   changelog has a dated section for the version.
+5. **Run `python3 scripts/check_release.py --tag vX.Y.Z`** (Python 3.11+). It checks that these
+   agree:
+   - the versions in `Cargo.toml`, `Cargo.lock`, `package.json`, `package-lock.json` and
+     `docs/openapi.json`;
+   - the versions in the docs' examples;
+   - a changelog section for the version, with a valid date.
+
+   CI runs the same check without `--tag`.
 6. **Merge these changes to `main`** through the usual branch and CI.
 
 ## Tagging
@@ -48,19 +60,25 @@ git push origin vX.Y.Z
 The workflow then:
 
 1. Checks the release metadata against the tag.
-2. Builds the dashboard and the binaries for five targets. Each archive gets a build provenance
-   attestation.
-3. Builds the container image and pushes it to `ghcr.io/exosphere8/flowsentinel:X.Y.Z` and
-   `:X.Y`, with an SBOM and provenance. It then smoke-tests the pushed image.
-4. Creates the GitHub release:
-   - the changelog section, as notes;
-   - the archives;
-   - `SHA256SUMS`.
+2. Builds the dashboard and the third-party license notices.
+3. Builds the binaries for five targets. Each archive includes the notices and gets a build
+   provenance attestation.
+4. Builds the container image for `linux/amd64` and `linux/arm64`, each on a native runner. Each
+   image is smoke-tested locally before it is pushed, untagged, with an SBOM and provenance.
+5. Once every binary and image has passed, publishes:
+   - **Image tags:** the two images are tagged as one multi-platform image,
+     `ghcr.io/exosphere8/flowsentinel:X.Y.Z` and `:X.Y`, which gets a provenance attestation.
+     There is no `latest` tag, so a patch on an older line cannot move it.
+   - **The GitHub release:** the changelog section as its notes, the archives, and
+     `SHA256SUMS`.
 
-A version with a suffix (`1.0.0-rc.1`) is marked as a pre-release.
+A version with a suffix (`1.0.0-rc.1`) is marked as a pre-release and its image gets only the
+`X.Y.Z-suffix` tag.
 
-Changes to the workflow, `scripts/check_release.py` or the `Dockerfile` run steps 1 to 3 on
-branches and pull requests without publishing. Check those runs before tagging.
+Steps 1 to 4 also run, without publishing, on branches and pull requests that change what a
+release is made from: the workflow, the release scripts, the `Dockerfile`, `Cargo.toml`,
+`Cargo.lock`, `CHANGELOG.md` or the dashboard's lock file. They also run on demand from the
+**Actions** tab. Check the run for the release-preparation change before tagging.
 
 ## After the release
 
@@ -76,8 +94,12 @@ branches and pull requests without publishing. Check those runs before tagging.
 
 ## If something goes wrong
 
-- **The workflow fails before publishing:** fix the cause on `main`, delete the tag
-  (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), and tag again.
+- **The workflow fails before publishing** (any job before **Publish**): nothing is tagged or
+  released. Untagged images may have been pushed; they are harmless. Fix the cause on `main`,
+  delete the tag (`git push --delete origin vX.Y.Z && git tag -d vX.Y.Z`), and tag again.
+- **Publish fails part-way:** check what exists (`gh release view vX.Y.Z`,
+  `docker buildx imagetools inspect ghcr.io/exosphere8/flowsentinel:X.Y.Z`), then re-run the
+  failed job from the Actions tab.
 - **A broken release was published:** do not reuse its version. Mark the GitHub release as a
   pre-release or add a warning to its notes, and release a patch version.
 - **A security fix:** follow [../SECURITY.md](../SECURITY.md). Prepare the fix in a private

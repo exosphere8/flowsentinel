@@ -1,7 +1,6 @@
 # Architecture
 
-This document describes how FlowSentinel is structured today and where each future capability
-will live. It is updated at the end of every milestone.
+This document describes how FlowSentinel is structured, and is kept current with the code.
 
 ## Design principles
 
@@ -12,10 +11,10 @@ will live. It is updated at the end of every milestone.
 3. **Fail soft on data, fail loud on configuration.** A malformed packet produces a warning and
    processing continues. An invalid configuration stops startup with an actionable message.
 4. **Explainable output.** Every derived result (flow, alert) carries the evidence it was built from.
-5. **Least privilege.** Offline analysis needs no special privileges. Live capture (Milestone 10)
-   will be isolated so the rest of the system never runs elevated.
+5. **Least privilege.** Offline analysis needs no special privileges. Live capture needs only the
+   `CAP_NET_RAW` capability, never root, and is off unless enabled.
 
-## Current components (Milestone 10)
+## Components
 
 ```
   browser: dashboard (React, served at /)
@@ -214,8 +213,8 @@ Turns one packet's bytes into metadata. See [docs/protocol-decoding.md](docs/pro
 - Each application model (`DnsMessage`, `DhcpMessage`, `HttpMessage`, `TlsHandshake`) holds
   only bounded, sanitized fields. Credential-bearing HTTP headers are matched by name and their
   values are never read; TLS randoms, key shares and certificates are skipped, not copied.
-- The crate does not depend on `capture`; it takes a raw link-type number so live capture
-  (Milestone 10) can reuse it.
+- The crate does not depend on `capture`; it takes a raw link-type number, so offline imports and
+  live capture share it.
 
 ### `crates/flow-engine`
 
@@ -309,13 +308,9 @@ metadata API, same-origin.
   and Windows, and the `e2e` job runs the Playwright smoke tests against a real server and
   database. CI runs on `main` and on `feature/**` branches before they are merged.
 
-## Planned components
+## Data flow
 
-| Crate (planned) | Milestone | Responsibility |
-| --- | --- | --- |
-| (none) | 11 | Metrics, tracing and further hardening |
-
-Data will flow in one direction:
+Data flows in one direction:
 
 ```
 PCAP file / interface -> capture -> decoder -> flow-engine -> detection-engine

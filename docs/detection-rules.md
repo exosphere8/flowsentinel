@@ -275,4 +275,4 @@ for alert in &analysis.detection.unwrap().alerts {
 ```
 
 `Detector::observe_packet` takes each decoded packet in capture order and `Detector::finish`
-takes the finished flows. Live capture (Milestone 10) can feed the same detector.
+takes the finished flows. Live captures are imported like uploads, so the same rules run on them.

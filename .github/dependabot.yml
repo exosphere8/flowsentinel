@@ -23,3 +23,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # The PostgreSQL image in docker-compose.yml.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly

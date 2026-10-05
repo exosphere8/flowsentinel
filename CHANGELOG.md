@@ -65,9 +65,11 @@ stores and shows metadata only, never payloads.
   - Fuzz targets for every parser of untrusted input.
   - Property tests, end-to-end browser tests, benchmarks and a load-test script.
 - **Releases**:
-  - Prebuilt binaries for Linux, macOS and Windows, with SHA-256 checksums and build provenance
-    attestations.
-  - A container image on GitHub Container Registry with an SBOM.
+  - Prebuilt binaries for Linux (x86-64, ARM64), macOS (Apple silicon, Intel) and Windows
+    (x86-64), with SHA-256 checksums and build provenance attestations.
+  - A container image for linux/amd64 and linux/arm64 on GitHub Container Registry, with an SBOM
+    and provenance.
+  - License notices for all bundled third-party code (`THIRD_PARTY_LICENSES.md`).
 
 ### Known limitations
 

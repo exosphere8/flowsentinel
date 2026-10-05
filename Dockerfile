@@ -35,6 +35,7 @@ RUN apt-get update \
     && install -d -o 10001 -g 10001 -m 0700 /var/lib/flowsentinel/uploads
 COPY --from=server /src/target/release/api-server /usr/local/bin/flowsentinel-api
 COPY --from=dashboard /src/frontend/dist /srv/dashboard
+COPY LICENSE THIRD_PARTY_LICENSES.md /usr/share/doc/flowsentinel/
 ENV FLOWSENTINEL_API_ADDR=0.0.0.0:8080 \
     FLOWSENTINEL_DASHBOARD_DIR=/srv/dashboard \
     FLOWSENTINEL_UPLOAD_DIR=/var/lib/flowsentinel/uploads

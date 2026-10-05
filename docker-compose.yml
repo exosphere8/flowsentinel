@@ -40,10 +40,11 @@ services:
   app:
     profiles: ["app"]
     build: .
-    # Set FLOWSENTINEL_IMAGE to run a published release instead of building:
+    # To run a published release instead of building, set in .env
     #   FLOWSENTINEL_IMAGE=ghcr.io/exosphere8/flowsentinel:0.1.0
+    # then run (see docs/installation.md):
     #   docker compose --profile app pull app
-    #   docker compose --profile app up -d --no-build
+    #   docker compose --profile app up -d --no-build --wait
     image: ${FLOWSENTINEL_IMAGE:-flowsentinel-api:local}
     restart: unless-stopped
     depends_on:
