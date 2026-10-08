@@ -26,7 +26,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -44,7 +44,7 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # RustSec advisories, licenses, banned and duplicate crates, sources
       # (deny.toml).
       - uses: EmbarkStudios/cargo-deny-action@v2
@@ -63,7 +63,7 @@ jobs:
     name: Live capture (libpcap) and OpenTelemetry
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -92,7 +92,7 @@ jobs:
     name: Minimum supported Rust (1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
       - name: Check
@@ -121,7 +121,7 @@ jobs:
       # Fail instead of skipping if the URL above is ever missing.
       FLOWSENTINEL_REQUIRE_DB_TESTS: "1"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Storage and API tests
@@ -131,7 +131,7 @@ jobs:
     name: Fixtures are reproducible
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       # Uses the runner's preinstalled Python 3; the generator needs only the standard library.
       - name: Regenerate PCAP fixtures
         run: python3 scripts/generate_pcap_fixtures.py
@@ -145,7 +145,7 @@ jobs:
     name: Docker Compose services
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Create CI environment file
         run: |
           cp .env.example .env
@@ -193,7 +193,7 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -228,7 +228,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v5
