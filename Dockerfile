@@ -10,7 +10,7 @@
 # OpenTelemetry export is compiled in and used only when
 # OTEL_EXPORTER_OTLP_ENDPOINT is set (see docs/observability.md).
 
-FROM node:22-trixie-slim AS dashboard
+FROM node:25-trixie-slim AS dashboard
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund
