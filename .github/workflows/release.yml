@@ -215,7 +215,7 @@ jobs:
             org.opencontainers.image.licenses=MIT
       # Built and tested locally first; nothing is pushed unless this passes.
       - name: Build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
@@ -239,7 +239,7 @@ jobs:
       - name: Push by digest
         id: push
         if: env.PUBLISH == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: ${{ matrix.platform }}
