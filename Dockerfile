@@ -18,7 +18,7 @@ COPY frontend/ ./
 COPY docs/openapi.json /src/docs/openapi.json
 RUN npm run check:api && npm run build
 
-FROM rust:1.97-slim-trixie AS server
+FROM rust:1.98-slim-trixie AS server
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libpcap-dev \
     && rm -rf /var/lib/apt/lists/*
